@@ -41,6 +41,9 @@ export interface IUser extends Document {
   passwordResetExpires?: Date;
   preferences: NotificationPreferences;
   lastLoginAt?: Date;
+  /** Active VIP tier index (0 = R0 Starter … 9 = R9 Crown). */
+  vipLevel: number;
+  vipActivatedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   setPassword(password: string): Promise<void>;
@@ -78,6 +81,8 @@ const UserSchema = new Schema<IUser>(
     passwordResetExpires: { type: Date, select: false },
     preferences: { type: PreferencesSchema, default: () => ({}) },
     lastLoginAt: { type: Date },
+    vipLevel: { type: Number, default: 0, min: 0, max: 9 },
+    vipActivatedAt: { type: Date },
   },
   { timestamps: true }
 );

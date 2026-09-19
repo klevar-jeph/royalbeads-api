@@ -9,6 +9,7 @@
 import { User, AccountStatus } from '../models/User';
 import { Notification } from '../models/Notification';
 import { DashboardSummaryDTO } from '../types/dto';
+import { getLevelByTier, VIP_LEVELS } from '../config/vipLevels';
 import { Types } from 'mongoose';
 
 export const dashboardService = {
@@ -17,6 +18,9 @@ export const dashboardService = {
     if (!user) return null;
 
     const unread = await Notification.countDocuments({ userId, read: false });
+
+    // --- VIP (Phase 4): real level from the user record --------------------
+    const vipLevel = getLevelByTier(user.vipLevel ?? 0) ?? VIP_LEVELS[0];
 
     return {
       user: {
@@ -36,12 +40,11 @@ export const dashboardService = {
       totalDeposits: 0,
       totalWithdrawals: 0,
       referralEarnings: 0,
-      // --- VIP placeholder ------------------------------------------------
-      // Default level R0 until the VIP phase implements progression.
+      // --- VIP: real level (Phase 4) --------------------------------------
       vip: {
-        level: 'R0',
-        levelName: 'Starter',
-        tier: 0,
+        level: vipLevel.code,
+        levelName: vipLevel.name,
+        tier: vipLevel.tier,
       },
       // --- Task placeholder -----------------------------------------------
       tasks: {

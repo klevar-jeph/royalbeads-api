@@ -1,7 +1,7 @@
 // tests/users.test.ts
 // Integration tests for user profile, dashboard, and API security.
 
-import { User, AccountStatus } from '../src/models/User';
+import { User } from '../src/models/User';
 import { freshApp, authenticatedAgent, TEST_USER } from './helpers';
 
 describe('User profile & dashboard', () => {

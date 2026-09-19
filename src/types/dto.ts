@@ -71,6 +71,35 @@ export interface UpdatePreferencesDTO {
   marketing?: boolean;
 }
 
+export interface VipLevelDTO {
+  id: number;
+  code: string;
+  name: string;
+  investment: number;
+  dailyReturn: number;
+  tier: number;
+  description: string;
+  status: string;
+}
+
+export interface VipStatusDTO {
+  current: VipLevelDTO;
+  next?: VipLevelDTO;
+  activatedAt?: string;
+  pendingPurchase?: VipPurchaseDTO;
+}
+
+export interface VipPurchaseDTO {
+  id: string;
+  levelCode: string;
+  levelName: string;
+  amount: number;
+  status: string;
+  reviewNote?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
 export interface NotificationDTO {
   id: string;
   type: NotificationType;
