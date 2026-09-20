@@ -16,6 +16,8 @@ import authRouter from './routes/auth';
 import userRouter from './routes/users';
 import notificationRouter from './routes/notifications';
 import vipRouter from './routes/vip';
+import taskRouter from './routes/tasks';
+import walletRouter from './routes/wallet';
 
 export function createApp(): Express {
   const app = express();
@@ -55,6 +57,8 @@ export function createApp(): Express {
   app.use('/api/users', userRouter);
   app.use('/api/notifications', notificationRouter);
   app.use('/api/vip', vipRouter);
+  app.use('/api/tasks', taskRouter);
+  app.use('/api/wallet', walletRouter);
 
   // --- 404 + error handler ----------------------------------------------
   app.use(notFound);

@@ -64,19 +64,23 @@ describe('User profile & dashboard', () => {
     expect(res.body.user.preferences.marketing).toBe(true);
   });
 
-  it('returns the dashboard summary with zero financial placeholders', async () => {
+  it('returns the dashboard summary with real wallet and task data', async () => {
     const app = freshApp();
     const { agent } = await authenticatedAgent(app, { email: 'dash@royalbeads.test' });
     const res = await agent.get('/api/users/me/dashboard').expect(200);
     const s = res.body.summary;
     expect(s.user.email).toBe('dash@royalbeads.test');
+    // New user: zero wallet balances (no rewards earned yet).
     expect(s.availableBalance).toBe(0);
     expect(s.totalEarnings).toBe(0);
     expect(s.totalDeposits).toBe(0);
     expect(s.totalWithdrawals).toBe(0);
     expect(s.referralEarnings).toBe(0);
+    // VIP defaults to R0 (Phase 4).
     expect(s.vip.level).toBe('R0');
-    expect(s.tasks).toEqual({ available: 0, completed: 0 });
+    // Phase 5: an R0 user has two unlocked tasks available today and none completed.
+    expect(s.tasks.available).toBe(2);
+    expect(s.tasks.completed).toBe(0);
     expect(s.notifications.unread).toBe(0);
   });
 

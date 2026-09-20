@@ -1,15 +1,15 @@
 // src/services/dashboardService.ts
 // Dashboard service – assembles the dashboard summary for the authenticated
-// user.
-//
-// Financial fields are deliberately zero until the wallet/ledger phase. We do
-// NOT fabricate balances, earnings, or transactions. The structure is ready
-// for future phases to plug real values in.
+// user: real wallet balances, VIP level, daily task counters, referral
+// placeholders and unread notification count.
 
 import { User, AccountStatus } from '../models/User';
 import { Notification } from '../models/Notification';
 import { DashboardSummaryDTO } from '../types/dto';
 import { getLevelByTier, VIP_LEVELS } from '../config/vipLevels';
+import { walletService } from './walletService';
+import { taskService } from './taskService';
+import { TransactionType } from '../models/Transaction';
 import { Types } from 'mongoose';
 
 export const dashboardService = {
@@ -22,6 +22,13 @@ export const dashboardService = {
     // --- VIP (Phase 4): real level from the user record --------------------
     const vipLevel = getLevelByTier(user.vipLevel ?? 0) ?? VIP_LEVELS[0];
 
+    // --- Wallet + tasks (Phase 5): real balances and today's tasks ---------
+    const [wallet, referralEarnings, taskList] = await Promise.all([
+      walletService.getOrCreateWallet(userId),
+      walletService.sumByType(userId, TransactionType.REFERRAL_COMMISSION),
+      taskService.listForUser(userId),
+    ]);
+
     return {
       user: {
         id: user._id.toString(),
@@ -32,24 +39,23 @@ export const dashboardService = {
         referralCode: user.referralCode,
         emailVerified: user.status === AccountStatus.ACTIVE,
       },
-      // --- Financial placeholders (Phase 3) --------------------------------
-      // These remain zero until the wallet/ledger service exists. Do not
-      // populate with fake values.
-      availableBalance: 0,
-      totalEarnings: 0,
+      // --- Wallet: real balances (Phase 5) ---------------------------------
+      availableBalance: wallet.availableBalance,
+      totalEarnings: wallet.totalEarned,
+      // Deposits/withdrawals arrive with the payments phase (Phase 6).
       totalDeposits: 0,
       totalWithdrawals: 0,
-      referralEarnings: 0,
+      referralEarnings,
       // --- VIP: real level (Phase 4) --------------------------------------
       vip: {
         level: vipLevel.code,
         levelName: vipLevel.name,
         tier: vipLevel.tier,
       },
-      // --- Task placeholder -----------------------------------------------
+      // --- Tasks: real daily counters (Phase 5) ----------------------------
       tasks: {
-        available: 0,
-        completed: 0,
+        available: taskList.items.filter((t) => t.remainingToday > 0).length,
+        completed: taskList.completedToday,
       },
       // --- Referral placeholder -------------------------------------------
       referrals: {
