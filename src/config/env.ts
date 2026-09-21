@@ -66,7 +66,29 @@ export const env = {
   email: {
     from: optional('EMAIL_FROM', 'Royalbeads <no-reply@royalbeads.local>'),
     provider: optional('EMAIL_PROVIDER', 'console') as 'console' | 'smtp',
+    supportEmail: optional('SUPPORT_EMAIL', 'support@royalbeads.local'),
   },
+
+  payments: {
+    /** Payment provider used for deposits: 'manual' (bank transfer reviewed
+     * by admins) or a gateway name ('paystack' | 'flutterwave') — gateway
+     * implementations land with their credentials enabled. */
+    provider: optional('PAYMENT_PROVIDER', 'manual') as 'manual' | 'paystack' | 'flutterwave',
+    /** Manual bank-transfer details shown to users when provider = manual. */
+    bankName: optional('BANK_NAME', ''),
+    bankAccountName: optional('BANK_ACCOUNT_NAME', ''),
+    bankAccountNumber: optional('BANK_ACCOUNT_NUMBER', ''),
+    /** Secrets are read lazily by the gateway modules, never at import. */
+    paystackSecretKey: process.env.PAYSTACK_SECRET_KEY,
+    flutterwaveSecretKey: process.env.FLUTTERWAVE_SECRET_KEY,
+    paystackWebhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET,
+    paystackCallbackUrl: optional('PAYSTACK_CALLBACK_URL', ''),
+  },
+
+  /** Referral commission percentage credited on a downline's first deposit (Phase 7). */
+  referralCommissionPercent: int('REFERRAL_COMMISSION_PERCENT', 5),
+  /** Minimum withdrawal amount (whole Naira). */
+  minWithdrawal: int('MIN_WITHDRAWAL', 5000),
 };
 
 export type Env = typeof env;

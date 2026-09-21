@@ -18,6 +18,8 @@ import notificationRouter from './routes/notifications';
 import vipRouter from './routes/vip';
 import taskRouter from './routes/tasks';
 import walletRouter from './routes/wallet';
+import adminRouter from './routes/admin';
+import paymentsRouter from './routes/payments';
 
 export function createApp(): Express {
   const app = express();
@@ -40,7 +42,14 @@ export function createApp(): Express {
       allowedHeaders: ['Content-Type', 'Authorization'],
     })
   );
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({
+    limit: '1mb',
+    // Preserve the raw body on every JSON request so webhook routes (e.g. the
+    // Paystack receiver) can verify HMAC signatures over the exact bytes sent.
+    verify: (req, _res, buf) => {
+      (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
   app.use(cookieParser());
 
@@ -59,6 +68,8 @@ export function createApp(): Express {
   app.use('/api/vip', vipRouter);
   app.use('/api/tasks', taskRouter);
   app.use('/api/wallet', walletRouter);
+  app.use('/api/payments', paymentsRouter);
+  app.use('/api/admin', adminRouter);
 
   // --- 404 + error handler ----------------------------------------------
   app.use(notFound);

@@ -125,6 +125,18 @@ export const walletService = {
     return { wallet, transactions };
   },
 
+  /** Recent ledger entries with optional type filter. */
+  async listTransactions(
+    userId: string | Types.ObjectId,
+    options: { type?: TransactionType; limit?: number } = {}
+  ): Promise<ITransaction[]> {
+    const query: Record<string, unknown> = { userId };
+    if (options.type) query.type = options.type;
+    return Transaction.find(query)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Math.max(options.limit ?? 30, 1), 100));
+  },
+
   /** Sum of ledger amounts by type – used by the dashboard summary. */
   async sumByType(userId: string | Types.ObjectId, type: TransactionType): Promise<number> {
     const result = await Transaction.aggregate<{ total: number | undefined }>([
