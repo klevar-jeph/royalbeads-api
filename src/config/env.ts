@@ -78,11 +78,27 @@ export const env = {
     bankName: optional('BANK_NAME', ''),
     bankAccountName: optional('BANK_ACCOUNT_NAME', ''),
     bankAccountNumber: optional('BANK_ACCOUNT_NUMBER', ''),
-    /** Secrets are read lazily by the gateway modules, never at import. */
+    /**
+     * Paystack credentials — test vs live.
+     *
+     * Test keys are the default (sandbox). When the corresponding LIVE keys
+     * are set (non-empty), they take precedence so going live is purely an
+     * env change with no code changes:
+     *   PAYSTACK_SECRET_KEY            (sk_test_...)
+     *   PAYSTACK_LIVE_SECRET_KEY       (sk_live_..., optional)
+     *   PAYSTACK_WEBHOOK_SECRET        (test webhook secret)
+     *   PAYSTACK_LIVE_WEBHOOK_SECRET   (live webhook secret, optional)
+     *   PAYSTACK_CALLBACK_URL          (checkout redirect, optional)
+     *   PAYSTACK_LIVE_CALLBACK_URL     (live redirect, optional)
+     * Secrets are read lazily by the gateway modules, never at import.
+     */
     paystackSecretKey: process.env.PAYSTACK_SECRET_KEY,
+    paystackLiveSecretKey: process.env.PAYSTACK_LIVE_SECRET_KEY,
     flutterwaveSecretKey: process.env.FLUTTERWAVE_SECRET_KEY,
     paystackWebhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET,
+    paystackLiveWebhookSecret: process.env.PAYSTACK_LIVE_WEBHOOK_SECRET,
     paystackCallbackUrl: optional('PAYSTACK_CALLBACK_URL', ''),
+    paystackLiveCallbackUrl: optional('PAYSTACK_LIVE_CALLBACK_URL', ''),
   },
 
   /** Referral commission percentage credited on a downline's first deposit (Phase 7). */

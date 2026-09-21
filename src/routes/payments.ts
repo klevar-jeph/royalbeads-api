@@ -15,11 +15,6 @@ import { paymentService } from '../services/paymentService';
 import { Deposit, DepositStatus } from '../models/Deposit';
 import { User } from '../models/User';
 
-/** Lazily read the callback URL so runtime-set env also applies. */
-function callbackUrl(): string | undefined {
-  return process.env.PAYSTACK_CALLBACK_URL || undefined;
-}
-
 export const paymentsRouter = Router();
 
 paymentsRouter.use(apiLimiter);
@@ -55,7 +50,7 @@ paymentsRouter.post(
         user.email,
         req.body.amount,
         deposit.reference,
-        callbackUrl()
+        paystackService.getCallbackUrl()
       );
 
       res.status(201).json({

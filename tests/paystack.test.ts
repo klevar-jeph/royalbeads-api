@@ -33,6 +33,42 @@ describe('Paystack signature verification', () => {
     delete process.env.PAYSTACK_SECRET_KEY;
     expect(paystackService.isConfigured()).toBe(false);
   });
+
+  it('prefers live credentials over test credentials when set', async () => {
+    process.env.PAYMENT_PROVIDER = 'paystack';
+    process.env.PAYSTACK_SECRET_KEY = 'sk_test_xxx';
+    process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_test_123';
+    delete process.env.PAYSTACK_LIVE_SECRET_KEY;
+    delete process.env.PAYSTACK_LIVE_WEBHOOK_SECRET;
+    expect(paystackService.isLiveMode()).toBe(false);
+
+    // Set the live keys: they take precedence.
+    process.env.PAYSTACK_LIVE_SECRET_KEY = 'sk_live_xxx';
+    process.env.PAYSTACK_LIVE_WEBHOOK_SECRET = 'whsec_live_123';
+    expect(paystackService.isLiveMode()).toBe(true);
+
+    const payload = JSON.stringify({ event: 'charge.success', data: { reference: 'PSK-L' } });
+    const liveSig = crypto.createHmac('sha512', 'whsec_live_123').update(payload).digest('hex');
+    const testSig = crypto.createHmac('sha512', 'whsec_test_123').update(payload).digest('hex');
+    expect(paystackService.verifyWebhookSignature(payload, liveSig)).toBe(true);
+    expect(paystackService.verifyWebhookSignature(payload, testSig)).toBe(false);
+
+    delete process.env.PAYSTACK_LIVE_SECRET_KEY;
+    delete process.env.PAYSTACK_LIVE_WEBHOOK_SECRET;
+    expect(paystackService.isLiveMode()).toBe(false);
+  });
+
+  it('resolves the callback URL with live overriding test', () => {
+    process.env.PAYSTACK_CALLBACK_URL = 'https://test.example/callback';
+    delete process.env.PAYSTACK_LIVE_CALLBACK_URL;
+    expect(paystackService.getCallbackUrl()).toBe('https://test.example/callback');
+
+    process.env.PAYSTACK_LIVE_CALLBACK_URL = 'https://live.example/callback';
+    expect(paystackService.getCallbackUrl()).toBe('https://live.example/callback');
+
+    delete process.env.PAYSTACK_CALLBACK_URL;
+    delete process.env.PAYSTACK_LIVE_CALLBACK_URL;
+  });
 });
 
 describe('Paystack deposit flow (mocked gateway)', () => {

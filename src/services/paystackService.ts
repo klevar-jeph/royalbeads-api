@@ -20,7 +20,8 @@ import crypto from 'crypto';
 const PAYSTACK_API = 'https://api.paystack.co';
 
 function secret(): string {
-  const key = process.env.PAYSTACK_SECRET_KEY;
+  // Live keys take precedence when provided; otherwise the test keys are used.
+  const key = process.env.PAYSTACK_LIVE_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY;
   if (process.env.PAYMENT_PROVIDER !== 'paystack' || !key) {
     throw paystackError(
       503,
@@ -28,6 +29,11 @@ function secret(): string {
     );
   }
   return key;
+}
+
+/** True when the live secret key is in use (informational / safeguards). */
+function isLiveMode(): boolean {
+  return Boolean(process.env.PAYSTACK_LIVE_SECRET_KEY);
 }
 
 function paystackError(status: number, message: string): Error & { status: number } {
@@ -73,6 +79,16 @@ export const paystackService = {
   /** True when the gateway path is usable (provider + secret key present). */
   isConfigured(): boolean {
     return process.env.PAYMENT_PROVIDER === 'paystack' && Boolean(process.env.PAYSTACK_SECRET_KEY);
+  },
+
+  /** Whether live keys are taking precedence (test keys are the fallback). */
+  isLiveMode(): boolean {
+    return isLiveMode();
+  },
+
+  /** Resolved callback URL: live overrides test when set. */
+  getCallbackUrl(): string | undefined {
+    return process.env.PAYSTACK_LIVE_CALLBACK_URL || process.env.PAYSTACK_CALLBACK_URL || undefined;
   },
 
   /**
@@ -135,8 +151,13 @@ export const paystackService = {
     if (!signature) return false;
     // Read process.env lazily (not via the cached `env` object) so values set
     // at runtime — e.g. rotating secrets — take effect without a restart.
+    // Live webhook secret takes precedence when set.
     const secretValue =
-      process.env.PAYSTACK_WEBHOOK_SECRET ?? process.env.PAYSTACK_SECRET_KEY ?? '';
+      process.env.PAYSTACK_LIVE_WEBHOOK_SECRET ||
+      process.env.PAYSTACK_WEBHOOK_SECRET ||
+      process.env.PAYSTACK_LIVE_SECRET_KEY ||
+      process.env.PAYSTACK_SECRET_KEY ||
+      '';
     if (!secretValue) return false;
     const digest = crypto
       .createHmac('sha512', secretValue)
