@@ -20,6 +20,7 @@ import taskRouter from './routes/tasks';
 import walletRouter from './routes/wallet';
 import adminRouter from './routes/admin';
 import paymentsRouter from './routes/payments';
+import referralRouter from './routes/referrals';
 
 export function createApp(): Express {
   const app = express();
@@ -69,6 +70,7 @@ export function createApp(): Express {
   app.use('/api/tasks', taskRouter);
   app.use('/api/wallet', walletRouter);
   app.use('/api/payments', paymentsRouter);
+  app.use('/api/referrals', referralRouter);
   app.use('/api/admin', adminRouter);
 
   // --- 404 + error handler ----------------------------------------------
