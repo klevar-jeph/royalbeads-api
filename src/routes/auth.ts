@@ -2,19 +2,18 @@
 // Authentication router.
 //
 // Endpoints
-//   POST /auth/register            – create an account (sends verification email)
+//   POST /auth/register            – create an account (active immediately)
 //   POST /auth/login               – exchange credentials for tokens (cookies)
 //   POST /auth/refresh             – rotate tokens using the refresh cookie
 //   POST /auth/logout              – clear auth cookies
 //   GET  /auth/me                  – current user profile (requires auth)
-//   POST /auth/verify-email        – verify an email verification token
-//   POST /auth/resend-verification – resend the verification email
-//   POST /auth/forgot-password     – request a password reset email
-//   POST /auth/reset-password      – reset password with a token
 //   POST /auth/change-password     – change password for the authenticated user
+//
+// NOTE: Email verification is intentionally NOT required — accounts are
+// fully ACTIVE immediately upon registration. Password-reset endpoints
+// live under /users/* (authenticated, account-settings) rather than /auth/*.
 
 import { Router, Request, Response, NextFunction } from 'express';
-import crypto from 'crypto';
 import { User, UserRole, AccountStatus } from '../models/User';
 import {
   generateAccessToken,
@@ -22,22 +21,9 @@ import {
   verifyRefreshToken,
 } from '../utils/token';
 import { env } from '../config/env';
-import {
-  validate,
-  registerSchema,
-  loginSchema,
-  emailVerificationSchema,
-  resendVerificationSchema,
-  forgotPasswordSchema,
-  resetPasswordSchema,
-  changePasswordSchema,
-} from '../validation/auth';
-import { authLimiter, sensitiveLimiter } from '../middleware/rateLimiter';
+import { validate, registerSchema, loginSchema } from '../validation/auth';
+import { authLimiter } from '../middleware/rateLimiter';
 import { requireAuth } from '../middleware/auth';
-import {
-  sendVerificationEmail,
-  sendPasswordResetEmail,
-} from '../services/email';
 
 export const authRouter = Router();
 
@@ -78,10 +64,6 @@ function msFromExpiry(expiry: string): number {
 
 // --- Token helpers ---------------------------------------------------------
 
-function randomToken(bytes = 32): string {
-  return crypto.randomBytes(bytes).toString('hex');
-}
-
 function authTokensFor(userId: string, role: string): { access: string; refresh: string } {
   const access = generateAccessToken({ sub: userId, role });
   const refresh = generateRefreshToken({ sub: userId });
@@ -108,7 +90,7 @@ function publicUser(user: InstanceType<typeof User>) {
     role: user.role,
     status: user.status,
     referralCode: user.referralCode,
-    emailVerified: user.status === AccountStatus.ACTIVE,
+    emailVerified: true,
     phoneVerified: false,
     preferences: user.preferences
       ? {
@@ -157,20 +139,17 @@ authRouter.post(
         phone,
         passwordHash: password, // hashed by pre('save') hook
         role: UserRole.USER,
-        status: AccountStatus.PENDING_VERIFICATION,
+        // status defaults to ACTIVE in the schema — no verification step.
         referredBy,
       });
 
-      // Email verification token (single-use, 24h).
-      user.emailVerificationToken = randomToken();
-      user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
       await user.save();
 
-      await sendVerificationEmail(user.email, user.emailVerificationToken!);
+      const tokens = authTokensFor(user._id.toString(), user.role);
+      setAuthCookies(res, tokens.access, tokens.refresh);
 
       res.status(201).json({
-        message: 'Account created. Check your email to verify your account.',
+        message: 'Account created successfully.',
         user: publicUser(user),
       });
     } catch (err) {
@@ -206,9 +185,6 @@ authRouter.post(
       }
       if (user.status === AccountStatus.DEACTIVATED) {
         throw httpError(403, 'Your account has been deactivated.');
-      }
-      if (user.status === AccountStatus.PENDING_VERIFICATION) {
-        throw httpError(403, 'Please verify your email before logging in.');
       }
 
       const tokens = authTokensFor(user._id.toString(), user.role);
@@ -280,153 +256,5 @@ authRouter.get('/me', requireAuth, async (req: Request, res: Response, next: Nex
     next(err);
   }
 });
-
-/**
- * POST /auth/verify-email
- */
-authRouter.post(
-  '/verify-email',
-  authLimiter,
-  validate(emailVerificationSchema),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { token } = req.body;
-      const user = await User.findOne({
-        emailVerificationToken: token,
-        emailVerificationExpires: { $gt: new Date() },
-      });
-
-      if (!user) {
-        throw httpError(400, 'Invalid or expired verification token.');
-      }
-
-      user.emailVerificationToken = undefined;
-      user.emailVerificationExpires = undefined;
-      user.status = AccountStatus.ACTIVE;
-      await user.save();
-
-      res.json({ message: 'Email verified. You can now log in.' });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-/**
- * POST /auth/resend-verification
- */
-authRouter.post(
-  '/resend-verification',
-  sensitiveLimiter,
-  validate(resendVerificationSchema),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { email } = req.body;
-      const user = await User.findOne({ email });
-
-      // Respond generically whether or not the user exists / is already verified
-      // to prevent enumeration.
-      if (user && user.status === AccountStatus.PENDING_VERIFICATION) {
-        user.emailVerificationToken = randomToken();
-        user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-        await user.save();
-        await sendVerificationEmail(user.email, user.emailVerificationToken!);
-      }
-
-      res.json({ message: 'If an unverified account exists for that email, a new verification link has been sent.' });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-/**
- * POST /auth/forgot-password
- */
-authRouter.post(
-  '/forgot-password',
-  sensitiveLimiter,
-  validate(forgotPasswordSchema),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { email } = req.body;
-      const user = await User.findOne({ email });
-
-      if (user && user.status !== AccountStatus.DEACTIVATED) {
-        user.passwordResetToken = randomToken();
-        user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1h
-        await user.save();
-        await sendPasswordResetEmail(user.email, user.passwordResetToken!);
-      }
-
-      res.json({ message: 'If an account exists for that email, a reset link has been sent.' });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-/**
- * POST /auth/reset-password
- */
-authRouter.post(
-  '/reset-password',
-  sensitiveLimiter,
-  validate(resetPasswordSchema),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { token, password } = req.body;
-      const user = await User.findOne({
-        passwordResetToken: token,
-        passwordResetExpires: { $gt: new Date() },
-      });
-
-      if (!user) {
-        throw httpError(400, 'Invalid or expired reset token.');
-      }
-
-      // `setPassword` hashes via argon2; the pre('save') hook only hashes when
-      // `passwordHash` is modified, so use the method then save.
-      await user.setPassword(password);
-      user.passwordResetToken = undefined;
-      user.passwordResetExpires = undefined;
-      await user.save();
-
-      res.json({ message: 'Password reset successful. You can now log in.' });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-/**
- * POST /auth/change-password
- */
-authRouter.post(
-  '/change-password',
-  requireAuth,
-  validate(changePasswordSchema),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { currentPassword, newPassword } = req.body;
-      const user = await User.findById(req.user!.id);
-      if (!user) {
-        throw httpError(404, 'User not found.');
-      }
-
-      const match = await user.comparePassword(currentPassword);
-      if (!match) {
-        throw httpError(401, 'Current password is incorrect.');
-      }
-
-      await user.setPassword(newPassword);
-      await user.save();
-
-      res.json({ message: 'Password changed.' });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
 
 export default authRouter;

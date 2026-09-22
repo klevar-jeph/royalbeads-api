@@ -11,6 +11,7 @@ import { Deposit, DepositStatus } from '../src/models/Deposit';
 import { Withdrawal, WithdrawalStatus } from '../src/models/Withdrawal';
 import { taskService } from '../src/services/taskService';
 import { Task } from '../src/models/Task';
+import { paystackService } from '../src/services/paystackService';
 
 const ADMIN = {
   fullName: 'Ops Admin',
@@ -40,31 +41,73 @@ async function seedBalance(userId: string) {
 
 const BANK = { bankName: 'GTB', accountNumber: '0123456789', accountName: 'Test User' };
 
+// Deposits are ALWAYS direct Paystack checkouts — spy on the gateway so the
+// deposit endpoints can be exercised without real HTTP calls.
+let mockInitialize: jest.Mock;
+
+beforeEach(() => {
+  process.env.PAYMENT_PROVIDER = 'paystack';
+  process.env.PAYSTACK_SECRET_KEY = 'sk_test_xxx';
+  process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_test_123';
+  delete process.env.PAYSTACK_LIVE_SECRET_KEY;
+  delete process.env.PAYSTACK_LIVE_WEBHOOK_SECRET;
+  process.env.NODE_ENV = 'development';
+
+  mockInitialize = jest.spyOn(paystackService, 'initialize') as unknown as jest.Mock;
+  mockInitialize.mockReset();
+  mockInitialize.mockImplementation(
+    async (_email: string, _amount: number, reference: string) => ({
+      authorizationUrl: `https://checkout.paystack.test/pay/${reference}`,
+      accessCode: 'ac_test',
+      reference,
+    })
+  );
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
 describe('Deposits', () => {
-  it('returns payment instructions (manual bank transfer)', async () => {
+  it('returns payment instructions (paystack provider)', async () => {
     const { agent } = await authenticatedAgent(freshApp());
     const res = await agent.get('/api/wallet/instructions').expect(200);
-    expect(res.body.instructions.provider).toBe('manual');
+    expect(res.body.instructions.provider).toBe('paystack');
     expect(res.body.instructions.minWithdrawal).toBeGreaterThan(0);
   });
 
-  it('creates a pending deposit and the admin approval credits the wallet', async () => {
+  it('creates a DIRECT Paystack deposit (PENDING, GATEWAY, with authorization URL)', async () => {
+    const { agent, user } = await authenticatedAgent(freshApp());
+
+    const created = await agent
+      .post('/api/wallet/deposits')
+      .send({ amount: 5000 })
+      .expect(201);
+    expect(created.body.deposit).toMatchObject({
+      amount: 5000,
+      status: DepositStatus.PENDING,
+      method: 'GATEWAY',
+    });
+    expect(created.body.deposit.reference).toMatch(/^DEP-/);
+    expect(created.body.deposit.authorizationUrl).toMatch(
+      /^https:\/\/checkout\.paystack\.test\/pay\/DEP-/
+    );
+    // No sender information is required or stored.
+    expect(created.body.deposit.note ?? null).toBeNull();
+
+    await agent.post('/api/wallet/deposits').send({ amount: 10 }).expect(422);
+    void user;
+  });
+
+  it('admin review still works on pending deposits (legacy/manual rows)', async () => {
     const app = freshApp();
     const { agent, user } = await authenticatedAgent(app);
     const admin = await adminAgent(app);
 
     const created = await agent
       .post('/api/wallet/deposits')
-      .send({ amount: 5000, note: 'sent from GTB' })
+      .send({ amount: 5000 })
       .expect(201);
-    expect(created.body.deposit).toMatchObject({
-      amount: 5000,
-      status: DepositStatus.PENDING,
-      method: 'BANK_TRANSFER',
-    });
-    expect(created.body.deposit.reference).toMatch(/^DEP-/);
-
-    await agent.post('/api/wallet/deposits').send({ amount: 10 }).expect(422);
 
     const queue = await admin.get('/api/admin/deposits?status=PENDING').expect(200);
     expect(queue.body.deposits).toHaveLength(1);

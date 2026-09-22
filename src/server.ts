@@ -12,9 +12,17 @@ import 'dotenv/config';
 import { createApp } from './app';
 import { connectDB } from './config/database';
 import { env } from './config/env';
+import { ensureAdminAccount } from './services/adminBootstrap';
 
 async function bootstrap(): Promise<void> {
   await connectDB();
+
+  // Admin account bootstrap (idempotent; env-driven). Never fatal.
+  try {
+    await ensureAdminAccount();
+  } catch (err) {
+    console.warn('[admin] Bootstrap skipped:', err instanceof Error ? err.message : err);
+  }
 
   const app = createApp();
   const server = app.listen(env.port, () => {

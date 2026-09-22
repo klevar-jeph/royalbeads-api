@@ -3,10 +3,10 @@
 
 import request from 'supertest';
 import { User, AccountStatus } from '../src/models/User';
-import { freshApp, authenticatedAgent, registerPending, TEST_USER } from './helpers';
+import { freshApp, authenticatedAgent, TEST_USER } from './helpers';
 
 describe('Auth flow', () => {
-  it('registers a new user (pending verification) and does not log them in', async () => {
+  it('registers a new user and logs them in immediately', async () => {
     const app = freshApp();
     const res = await request(app)
       .post('/api/auth/register')
@@ -20,9 +20,8 @@ describe('Auth flow', () => {
 
     expect(res.body).toHaveProperty('user');
     expect(res.body.user.email).toBe('jane@royalbeads.test');
-    expect(res.body.user.status).toBe(AccountStatus.PENDING_VERIFICATION);
-    expect(res.body.user.emailVerified).toBe(false);
-    // Should not receive auth cookies before verification/email is unused.
+    expect(res.body.user.status).toBe(AccountStatus.ACTIVE);
+    expect(res.body.user.emailVerified).toBe(true);
   });
 
   it('rejects duplicate email registration', async () => {
@@ -33,42 +32,6 @@ describe('Auth flow', () => {
       .send({ ...TEST_USER, email: TEST_USER.email })
       .expect(409);
     expect(res.body.message).toMatch(/already exists/i);
-  });
-
-  it('verifies email with a token and activates the account', async () => {
-    const app = freshApp();
-    const { agent, verificationToken } = await registerPending(app, {
-      email: 'verify@royalbeads.test',
-    });
-    const res = await agent
-      .post('/api/auth/verify-email')
-      .send({ token: verificationToken })
-      .expect(200);
-    expect(res.body.message).toMatch(/verified/i);
-
-    const user = await User.findOne({ email: 'verify@royalbeads.test' });
-    expect(user?.status).toBe(AccountStatus.ACTIVE);
-  });
-
-  it('rejects login with wrong password', async () => {
-    const app = freshApp();
-    await registerPending(app, { email: 'wrong@royalbeads.test' });
-    await User.updateOne({ email: 'wrong@royalbeads.test' }, { $set: { status: AccountStatus.ACTIVE } });
-    const res = await request(app)
-      .post('/api/auth/login')
-      .send({ email: 'wrong@royalbeads.test', password: 'WrongPass1' })
-      .expect(401);
-    expect(res.body.message).toMatch(/invalid email or password/i);
-  });
-
-  it('rejects login for unverified (pending) accounts', async () => {
-    const app = freshApp();
-    await registerPending(app, { email: 'pending@royalbeads.test' });
-    const res = await request(app)
-      .post('/api/auth/login')
-      .send({ email: 'pending@royalbeads.test', password: TEST_USER.password })
-      .expect(403);
-    expect(res.body.message).toMatch(/verify your email/i);
   });
 
   it('logs in an active user and sets httpOnly cookies', async () => {
@@ -97,5 +60,17 @@ describe('Auth flow', () => {
   it('blocks unauthenticated dashboard access', async () => {
     const app = freshApp();
     await request(app).get('/api/users/me/dashboard').expect(401);
+  });
+
+  it('rejects login with wrong password', async () => {
+    const app = freshApp();
+    await request(app)
+      .post('/api/auth/register')
+      .send({ fullName: 'Wrong', email: 'wrong@royalbeads.test', password: 'Str0ngPass!' });
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'wrong@royalbeads.test', password: 'WrongPass1' })
+      .expect(401);
+    expect(res.body.message).toMatch(/invalid email or password/i);
   });
 });

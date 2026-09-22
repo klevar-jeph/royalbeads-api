@@ -1,11 +1,14 @@
 // src/services/paymentService.ts
 // Deposits & withdrawals.
 //
-// Deposits (manual/bank-transfer provider): the user submits a PENDING
-// request; an admin confirms payment and the wallet is credited atomically.
-// Withdrawals: the user submits bank details; approval debits the wallet
-// immediately (guarded, so an overdraft is impossible) and marks the request
-// APPROVED; an admin later flips it to PAID after the transfer settles.
+// Deposits: ALWAYS a direct Paystack checkout — createDeposit() calls
+//   Paystack's /transaction/initialize and returns the authorization URL for
+//   the browser to redirect. The wallet is credited idempotently by the
+//   webhook (charge.success) — no admin step and no sender information.
+//   (The admin deposit-review endpoints remain for legacy BANK_TRANSFER rows.)
+// Withdrawals: user submits bank details; approval debits the wallet
+//   immediately (guarded, so an overdraft is impossible) and marks the request
+//   APPROVED; an admin later flips it to PAID after the transfer settles.
 
 import { Deposit, DepositStatus, IDeposit } from '../models/Deposit';
 import { Withdrawal, WithdrawalStatus, IWithdrawal } from '../models/Withdrawal';
@@ -14,6 +17,7 @@ import { walletService } from './walletService';
 import { referralService } from './referralService';
 import { Notification, NotificationType } from '../models/Notification';
 import { env } from '../config/env';
+import { paystackService } from './paystackService';
 import { Types } from 'mongoose';
 
 function httpError(status: number, message: string): Error & { status: number } {
@@ -44,32 +48,53 @@ export const paymentService = {
           : undefined,
       minWithdrawal: env.minWithdrawal,
     };
-  },
+    },
 
   // --- Deposits ------------------------------------------------------------
 
+  /**
+   * Initiate a deposit — a DIRECT Paystack checkout, never a "deposit request".
+   *
+   * Calls Paystack's initialize API and returns the user-facing authorization
+   * URL for an immediate browser redirect. The wallet is credited
+   * idempotently by the webhook when payment succeeds — no admin step and no
+   * sender information required.
+   */
   async createDeposit(
     userId: string | Types.ObjectId,
     amount: number,
-    note?: string
-  ): Promise<IDeposit> {
+    note?: string,
+    userEmail?: string
+  ): Promise<IDeposit & { authorizationUrl?: string }> {
+    const reference = newReference('DEP');
+    const checkout = await paystackService.initialize(
+      userEmail ?? '',
+      amount,
+      reference,
+      paystackService.getCallbackUrl()
+    );
+
+    // Record the deposit as PENDING until the webhook confirms the charge.
     const deposit = await Deposit.create({
       userId,
       amount,
       note,
-      method: env.payments.provider === 'manual' ? 'BANK_TRANSFER' : 'GATEWAY',
+      method: 'GATEWAY',
       status: DepositStatus.PENDING,
-      reference: newReference('DEP'),
+      reference,
     });
 
     await Notification.create({
       userId,
       type: NotificationType.WALLET,
-      title: 'Deposit submitted',
-      message: `Your deposit request of ₦${amount.toLocaleString()} (ref ${deposit.reference}) is awaiting confirmation.`,
+      title: 'Deposit initiated',
+      message: `Your deposit of ₦${amount.toLocaleString()} (ref ${reference}) is awaiting Paystack confirmation.`,
     });
 
-    return deposit;
+    return {
+      ...deposit.toObject(),
+      authorizationUrl: checkout.authorizationUrl,
+    } as unknown as IDeposit & { authorizationUrl?: string };
   },
 
   async listDeposits(

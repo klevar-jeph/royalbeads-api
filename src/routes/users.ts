@@ -6,10 +6,11 @@
 
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { apiLimiter } from '../middleware/rateLimiter';
+import { apiLimiter, sensitiveLimiter } from '../middleware/rateLimiter';
 import { validate } from '../validation/auth';
 import { updateProfileSchema, updatePreferencesSchema } from '../validation/user';
 import { userController } from '../controllers/userController';
+import { forgotPasswordSchema, resetPasswordSchema, changePasswordSchema } from '../validation/auth';
 
 export const userRouter = Router();
 
@@ -40,5 +41,39 @@ userRouter.patch('/me/preferences', validate(updatePreferencesSchema), userContr
  * Aggregated dashboard summary for the current user.
  */
 userRouter.get('/me/dashboard', userController.getDashboard);
+
+/**
+ * POST /api/users/me/password/forgot
+ * Request a password reset link (sent to the logged-in user's email).
+ * Authenticated account-settings endpoint.
+ */
+userRouter.post(
+  '/me/password/forgot',
+  sensitiveLimiter,
+  validate(forgotPasswordSchema),
+  userController.forgotPassword
+);
+
+/**
+ * POST /api/users/me/password/reset
+ * Reset password using a valid reset token.
+ */
+userRouter.post(
+  '/me/password/reset',
+  sensitiveLimiter,
+  validate(resetPasswordSchema),
+  userController.resetPassword
+);
+
+/**
+ * POST /api/users/me/password/change
+ * Change password for the authenticated user (requires current password).
+ */
+userRouter.post(
+  '/me/password/change',
+  sensitiveLimiter,
+  validate(changePasswordSchema),
+  userController.changePassword
+);
 
 export default userRouter;

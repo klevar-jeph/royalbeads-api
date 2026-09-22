@@ -47,7 +47,7 @@ export const env = {
   },
 
   cookie: {
-    secure: bool('COOKIE_SECURE', false),
+    secure: process.env.NODE_ENV === 'test' ? false : bool('COOKIE_SECURE', false),
     // SameSite policy: 'lax' is CSRF-safe for top-level navigations while
     // permitting cookies on same-site requests. Use 'none' only if you need
     // third-party cookies (and COOKIE_SECURE must then be true).
@@ -105,6 +105,21 @@ export const env = {
   referralCommissionPercent: int('REFERRAL_COMMISSION_PERCENT', 5),
   /** Minimum withdrawal amount (whole Naira). */
   minWithdrawal: int('MIN_WITHDRAWAL', 5000),
+
+  /**
+   * Platform administrator bootstrap credentials.
+   *
+   * On every server start the API ensures an ADMIN account exists with this
+   * username (email used to sign in) and password, so admin access is fully
+   * controlled from the environment:
+   *   ADMIN_USERNAME=admin@royalbeads.com
+   *   ADMIN_PASSWORD=a-long-random-password
+   * Update the .env values and restart to change the admin credentials.
+   */
+  admin: {
+    username: optional('ADMIN_USERNAME', '').trim().toLowerCase(),
+    password: optional('ADMIN_PASSWORD', ''),
+  },
 };
 
 export type Env = typeof env;

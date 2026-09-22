@@ -21,8 +21,10 @@ paymentsRouter.use(apiLimiter);
 
 /**
  * POST /api/payments/paystack/initialize
- * Start a Paystack collection: creates a PENDING local deposit and returns the
- * authorization URL. Body: { amount, note? }.
+ * Start a Paystack collection. Delegates to paymentService.createDeposit
+ * which, when PAYMENT_PROVIDER=paystack, calls Paystack's /transaction/
+ * initialize API and returns the authorization URL for the browser to
+ * redirect to. Body: { amount, note? }.
  */
 paymentsRouter.post(
   '/paystack/initialize',
@@ -33,35 +35,21 @@ paymentsRouter.post(
       const user = await User.findById(req.user!.id);
       if (!user) return res.status(404).json({ message: 'User not found.' });
 
-      // Create the local PENDING deposit first (method GATEWAY forced below).
-      const deposit = await Deposit.create({
-        userId: user._id,
-        amount: req.body.amount,
-        note: req.body.note,
-        method: 'GATEWAY',
-        status: DepositStatus.PENDING,
-        reference: `PSK-${Date.now().toString(36).toUpperCase()}-${Math.random()
-          .toString(36)
-          .slice(2, 8)
-          .toUpperCase()}`,
-      });
-
-      const checkout = await paystackService.initialize(
-        user.email,
+      const result = await paymentService.createDeposit(
+        user._id,
         req.body.amount,
-        deposit.reference,
-        paystackService.getCallbackUrl()
+        req.body.note,
+        user.email
       );
 
       res.status(201).json({
         deposit: {
-          id: deposit._id.toString(),
-          amount: deposit.amount,
-          reference: deposit.reference,
-          status: deposit.status,
+          id: result._id.toString(),
+          amount: result.amount,
+          reference: result.reference,
+          status: result.status,
         },
-        authorizationUrl: checkout.authorizationUrl,
-        accessCode: checkout.accessCode,
+        authorizationUrl: (result as unknown as { authorizationUrl?: string }).authorizationUrl,
       });
     } catch (err) {
       next(err);

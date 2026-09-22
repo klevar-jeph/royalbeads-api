@@ -19,21 +19,51 @@ import crypto from 'crypto';
 
 const PAYSTACK_API = 'https://api.paystack.co';
 
-function secret(): string {
-  // Live keys take precedence when provided; otherwise the test keys are used.
-  const key = process.env.PAYSTACK_LIVE_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY;
-  if (process.env.PAYMENT_PROVIDER !== 'paystack' || !key) {
-    throw paystackError(
-      503,
-      'Paystack is not configured. Set PAYMENT_PROVIDER=paystack and PAYSTACK_SECRET_KEY.'
-    );
-  }
-  return key;
+// Read NODE_ENV fresh each time so Jest (and runtime secret rotation)
+// can mutate it without restarting the process.
+function isProduction(): boolean {
+  return process.env.NODE_ENV === 'production';
 }
 
-/** True when the live secret key is in use (informational / safeguards). */
-function isLiveMode(): boolean {
-  return Boolean(process.env.PAYSTACK_LIVE_SECRET_KEY);
+/**
+ * Resolved Paystack secret key.
+ *
+ * Selection is driven by `NODE_ENV` (not by whether a live key happens to be
+ * set), so the environment fully controls which credentials are used:
+ *
+ *   NODE_ENV=production  → PAYSTACK_LIVE_SECRET_KEY (required when provider=paystack)
+ *   anything else        → PAYSTACK_SECRET_KEY (test/sandbox key)
+ *
+ * This keeps test/live selection explicit and predictable instead of "live wins
+ * if it happens to be set", which made the active key depend on deploy order.
+ */
+function secret(): string {
+  if (process.env.PAYMENT_PROVIDER !== 'paystack') {
+    throw paystackError(
+      503,
+      'Paystack is not configured. Set PAYMENT_PROVIDER=paystack.'
+    );
+  }
+
+  if (isProduction()) {
+    const liveKey = process.env.PAYSTACK_LIVE_SECRET_KEY;
+    if (!liveKey) {
+      throw paystackError(
+        503,
+        'Paystack live key is required in production. Set PAYSTACK_LIVE_SECRET_KEY (sk_live_...).'
+      );
+    }
+    return liveKey;
+  }
+
+  const testKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!testKey) {
+    throw paystackError(
+      503,
+      'Paystack test key is required in non-production. Set PAYSTACK_SECRET_KEY (sk_test_...).'
+    );
+  }
+  return testKey;
 }
 
 function paystackError(status: number, message: string): Error & { status: number } {
@@ -81,14 +111,20 @@ export const paystackService = {
     return process.env.PAYMENT_PROVIDER === 'paystack' && Boolean(process.env.PAYSTACK_SECRET_KEY);
   },
 
-  /** Whether live keys are taking precedence (test keys are the fallback). */
+  /** Whether the live key is active. False when provider != paystack or not in production. */
   isLiveMode(): boolean {
-    return isLiveMode();
+    return isProduction() && Boolean(process.env.PAYSTACK_LIVE_SECRET_KEY);
   },
 
-  /** Resolved callback URL: live overrides test when set. */
+  /**
+   * Resolved checkout callback URL.
+   * NODE_ENV=production → PAYSTACK_LIVE_CALLBACK_URL; otherwise
+   * PAYSTACK_CALLBACK_URL. Falls back to undefined when unset.
+   */
   getCallbackUrl(): string | undefined {
-    return process.env.PAYSTACK_LIVE_CALLBACK_URL || process.env.PAYSTACK_CALLBACK_URL || undefined;
+    return isProduction()
+      ? process.env.PAYSTACK_LIVE_CALLBACK_URL || process.env.PAYSTACK_CALLBACK_URL || undefined
+      : process.env.PAYSTACK_CALLBACK_URL || undefined;
   },
 
   /**
@@ -151,13 +187,21 @@ export const paystackService = {
     if (!signature) return false;
     // Read process.env lazily (not via the cached `env` object) so values set
     // at runtime — e.g. rotating secrets — take effect without a restart.
-    // Live webhook secret takes precedence when set.
-    const secretValue =
-      process.env.PAYSTACK_LIVE_WEBHOOK_SECRET ||
-      process.env.PAYSTACK_WEBHOOK_SECRET ||
-      process.env.PAYSTACK_LIVE_SECRET_KEY ||
-      process.env.PAYSTACK_SECRET_KEY ||
-      '';
+    // Webhook secret is selected the same way as the API key: production uses
+    // the live webhook secret; everything else uses the test webhook secret.
+    // The raw API keys are only used as a last-resort fallback for older setups
+    // that configured a webhook secret via the secret key instead.
+    const secretValue = isProduction()
+      ? process.env.PAYSTACK_LIVE_WEBHOOK_SECRET ||
+        process.env.PAYSTACK_LIVE_SECRET_KEY ||
+        process.env.PAYSTACK_WEBHOOK_SECRET ||
+        process.env.PAYSTACK_SECRET_KEY ||
+        ''
+      : process.env.PAYSTACK_WEBHOOK_SECRET ||
+        process.env.PAYSTACK_SECRET_KEY ||
+        process.env.PAYSTACK_LIVE_WEBHOOK_SECRET ||
+        process.env.PAYSTACK_LIVE_SECRET_KEY ||
+        '';
     if (!secretValue) return false;
     const digest = crypto
       .createHmac('sha512', secretValue)

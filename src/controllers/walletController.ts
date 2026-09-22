@@ -7,6 +7,13 @@ import { paymentService } from '../services/paymentService';
 import { TransactionType } from '../models/Transaction';
 import { DepositStatus, IDeposit } from '../models/Deposit';
 import { WithdrawalStatus, IWithdrawal } from '../models/Withdrawal';
+import { User } from '../models/User';
+
+function httpError(status: number, message: string): Error & { status: number } {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+}
 
 function toDepositDTO(d: IDeposit) {
   return {
@@ -17,6 +24,7 @@ function toDepositDTO(d: IDeposit) {
     reference: d.reference,
     note: d.note,
     reviewNote: d.reviewNote,
+    authorizationUrl: (d as unknown as { authorizationUrl?: string }).authorizationUrl,
     createdAt: d.createdAt.toISOString(),
     reviewedAt: d.reviewedAt?.toISOString(),
   };
@@ -103,15 +111,22 @@ export const walletController = {
     }
   },
 
-  /** POST /api/wallet/deposits — submit a deposit request. */
+    /** POST /api/wallet/deposits — submit a deposit request / initiate Paystack checkout. */
   async createDeposit(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const user = await User.findById(req.user!.id);
+      if (!user) throw httpError(404, 'User not found.');
+
       const deposit = await paymentService.createDeposit(
         req.user!.id,
         req.body.amount,
-        req.body.note
+        req.body.note,
+        user.email
       );
-      res.status(201).json({ deposit: toDepositDTO(deposit) });
+      const dto = toDepositDTO(deposit);
+      // When Paystack is the provider, the response includes an authorizationUrl
+      // so the frontend can redirect the user to complete payment.
+      res.status(201).json({ deposit: dto });
     } catch (err) {
       next(err);
     }

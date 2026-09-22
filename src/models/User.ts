@@ -14,11 +14,9 @@ export enum UserRole {
 export enum AccountStatus {
   ACTIVE = 'ACTIVE',
   SUSPENDED = 'SUSPENDED',
-  PENDING_VERIFICATION = 'PENDING_VERIFICATION',
   DEACTIVATED = 'DEACTIVATED',
 }
 
-/** Notification preference channels. Defaults are permissive. */
 export interface NotificationPreferences {
   email: boolean;
   system: boolean;
@@ -35,8 +33,6 @@ export interface IUser extends Document {
   status: AccountStatus;
   referralCode: string;
   referredBy?: Types.ObjectId;
-  emailVerificationToken?: string;
-  emailVerificationExpires?: Date;
   passwordResetToken?: string;
   passwordResetExpires?: Date;
   preferences: NotificationPreferences;
@@ -70,13 +66,11 @@ const UserSchema = new Schema<IUser>(
     status: {
       type: String,
       enum: Object.values(AccountStatus),
-      default: AccountStatus.PENDING_VERIFICATION,
+      default: AccountStatus.ACTIVE,
       index: true,
     },
     referralCode: { type: String, unique: true },
     referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    emailVerificationToken: { type: String, select: false },
-    emailVerificationExpires: { type: Date, select: false },
     passwordResetToken: { type: String, select: false },
     passwordResetExpires: { type: Date, select: false },
     preferences: { type: PreferencesSchema, default: () => ({}) },
@@ -87,9 +81,8 @@ const UserSchema = new Schema<IUser>(
   { timestamps: true }
 );
 
-// Index for lookup by verification / reset tokens (kept out of the default
+// Index for lookup by password reset token (kept out of the default
 // projection via `select: false` above).
-UserSchema.index({ emailVerificationToken: 1 }, { sparse: true });
 UserSchema.index({ passwordResetToken: 1 }, { sparse: true });
 
 // Generate a unique 8-character referral code.

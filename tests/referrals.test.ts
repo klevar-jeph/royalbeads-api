@@ -8,6 +8,7 @@ import { User, UserRole, AccountStatus } from '../src/models/User';
 import { Wallet } from '../src/models/Wallet';
 import { Transaction, TransactionType } from '../src/models/Transaction';
 import { Notification } from '../src/models/Notification';
+import { paystackService } from '../src/services/paystackService';
 
 const ADMIN = {
   fullName: 'Root Admin',
@@ -39,6 +40,19 @@ async function referredAgent(app: Express, email: string, referralCode: string) 
   await agent.post('/api/auth/login').send({ email, password: TEST_USER.password }).expect(200);
   return agent;
 }
+
+// Deposit creation always goes through the Paystack gateway now — spy on
+// initialize so deposit-creation in these tests never makes real HTTP calls.
+beforeEach(() => {
+  const mockInitialize = jest.spyOn(paystackService, 'initialize') as unknown as jest.Mock;
+  mockInitialize.mockImplementation(
+    async (_email: string, _amount: number, reference: string) => ({
+      authorizationUrl: `https://checkout.paystack.test/pay/${reference}`,
+      accessCode: 'ac_test',
+      reference,
+    })
+  );
+});
 
 describe('Referrals', () => {
   it('returns the referral summary with code, link, rate and downlines', async () => {

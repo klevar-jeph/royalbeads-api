@@ -16,5 +16,11 @@ process.env.EMAIL_PROVIDER = 'console';
 process.env.RATE_LIMIT_WINDOW_MS = '900000';
 process.env.RATE_LIMIT_MAX = '10000';
 process.env.RATE_LIMIT_AUTH_MAX = '10000';
+// Deposits are ALWAYS direct Paystack checkouts — the cached env provider
+// must be 'paystack' before any module reads it, and a secret key must exist
+// for the gateway path to be usable in tests.
+process.env.PAYMENT_PROVIDER = 'paystack';
+process.env.PAYSTACK_SECRET_KEY = 'sk_test_xxx';
+process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_test_123';
 // MONGODB_URI is set dynamically by setup.ts (in-memory server).
 process.env.MONGODB_URI = 'mongodb://localhost:27017/royalbeads-test';

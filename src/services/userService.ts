@@ -24,7 +24,7 @@ function toDTO(user: IUser): UserDTO {
     role: user.role as UserRole,
     status: user.status as AccountStatus,
     referralCode: user.referralCode,
-    emailVerified: user.status === AccountStatus.ACTIVE,
+    emailVerified: true,
     phoneVerified: false,
     preferences: {
       email: user.preferences?.email ?? true,

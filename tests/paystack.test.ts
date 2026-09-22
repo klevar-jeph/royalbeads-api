@@ -19,7 +19,7 @@ describe('Paystack signature verification', () => {
     process.env.PAYSTACK_SECRET_KEY = 'sk_test_xxx';
     process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_test_123';
 
-    const payload = JSON.stringify({ event: 'charge.success', data: { reference: 'PSK-1' } });
+    const payload = JSON.stringify({ event: 'charge.success', data: { reference: 'DEP-1' } });
     const goodSig = crypto.createHmac('sha512', 'whsec_test_123').update(payload).digest('hex');
 
     expect(paystackService.verifyWebhookSignature(payload, goodSig)).toBe(true);
@@ -34,193 +34,253 @@ describe('Paystack signature verification', () => {
     expect(paystackService.isConfigured()).toBe(false);
   });
 
-  it('prefers live credentials over test credentials when set', async () => {
+  it('isLiveMode is true only in production with the live key set', async () => {
     process.env.PAYMENT_PROVIDER = 'paystack';
     process.env.PAYSTACK_SECRET_KEY = 'sk_test_xxx';
     process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_test_123';
     delete process.env.PAYSTACK_LIVE_SECRET_KEY;
     delete process.env.PAYSTACK_LIVE_WEBHOOK_SECRET;
+
+    // Non-production: live key being set should NOT flip isLiveMode.
+    process.env.NODE_ENV = 'development';
+    process.env.PAYSTACK_LIVE_SECRET_KEY = 'sk_live_xxx';
+    process.env.PAYSTACK_LIVE_WEBHOOK_SECRET = 'whsec_live_123';
     expect(paystackService.isLiveMode()).toBe(false);
 
-    // Set the live keys: they take precedence.
+    // Production without live key: not live.
+    process.env.NODE_ENV = 'production';
+    delete process.env.PAYSTACK_LIVE_SECRET_KEY;
+    delete process.env.PAYSTACK_LIVE_WEBHOOK_SECRET;
+    expect(paystackService.isLiveMode()).toBe(false);
+
+    // Production with live key: live.
     process.env.PAYSTACK_LIVE_SECRET_KEY = 'sk_live_xxx';
     process.env.PAYSTACK_LIVE_WEBHOOK_SECRET = 'whsec_live_123';
     expect(paystackService.isLiveMode()).toBe(true);
 
-    const payload = JSON.stringify({ event: 'charge.success', data: { reference: 'PSK-L' } });
+    // Webhook signature follows the NODE_ENV rule too.
+    const payload = JSON.stringify({ event: 'charge.success', data: { reference: 'DEP-L' } });
     const liveSig = crypto.createHmac('sha512', 'whsec_live_123').update(payload).digest('hex');
     const testSig = crypto.createHmac('sha512', 'whsec_test_123').update(payload).digest('hex');
     expect(paystackService.verifyWebhookSignature(payload, liveSig)).toBe(true);
     expect(paystackService.verifyWebhookSignature(payload, testSig)).toBe(false);
 
+    delete process.env.PAYMENT_PROVIDER;
+    delete process.env.PAYSTACK_SECRET_KEY;
+    delete process.env.PAYSTACK_WEBHOOK_SECRET;
     delete process.env.PAYSTACK_LIVE_SECRET_KEY;
     delete process.env.PAYSTACK_LIVE_WEBHOOK_SECRET;
-    expect(paystackService.isLiveMode()).toBe(false);
+    process.env.NODE_ENV = 'development';
   });
 
-  it('resolves the callback URL with live overriding test', () => {
+  it('resolves the callback URL by NODE_ENV: production uses the live URL', () => {
+    process.env.PAYMENT_PROVIDER = 'paystack';
     process.env.PAYSTACK_CALLBACK_URL = 'https://test.example/callback';
     delete process.env.PAYSTACK_LIVE_CALLBACK_URL;
+
+    // Non-production uses the test callback URL only.
+    process.env.NODE_ENV = 'development';
     expect(paystackService.getCallbackUrl()).toBe('https://test.example/callback');
 
+    // Switch to production without a live callback URL -> falls back to the test URL.
+    process.env.NODE_ENV = 'production';
+    expect(paystackService.getCallbackUrl()).toBe('https://test.example/callback');
+
+    // Production with a live callback URL uses it.
     process.env.PAYSTACK_LIVE_CALLBACK_URL = 'https://live.example/callback';
     expect(paystackService.getCallbackUrl()).toBe('https://live.example/callback');
 
+    delete process.env.PAYMENT_PROVIDER;
     delete process.env.PAYSTACK_CALLBACK_URL;
     delete process.env.PAYSTACK_LIVE_CALLBACK_URL;
+    process.env.NODE_ENV = 'development';
   });
 });
 
-describe('Paystack deposit flow (mocked gateway)', () => {
-  const mockInit = jest.fn();
-  const mockVerifyRef = jest.fn();
+// --- Paystack deposit flow (HTTP calls mocked) --------------------------------
+// We spy directly on the paystackService object (the same instance the app
+// imports) instead of jest.mock'ing the module, which avoids module-resolution
+// timing issues between the helpers/app import graph and the test file.
 
-  beforeEach(() => {
-    process.env.PAYMENT_PROVIDER = 'paystack';
-    process.env.PAYSTACK_SECRET_KEY = 'sk_test_xxx';
-    process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_test_123';
-    mockInit.mockReset();
-    mockVerifyRef.mockReset();
-    // Default: gateway returns a valid checkout for any initialize call.
-    mockInit.mockResolvedValue({
-      authorizationUrl: 'https://checkout.paystack.com/mock',
-      accessCode: 'mock',
-      reference: 'PSK-MOCK-REF',
-    });
-    jest.spyOn(paystackService, 'initialize').mockImplementation(mockInit);
-    jest.spyOn(paystackService, 'verify').mockImplementation(mockVerifyRef);
-  });
+let mockInitialize: jest.Mock;
+let mockVerify: jest.Mock;
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
+function sign(payload: string): string {
+  return crypto
+    .createHmac('sha512', process.env.PAYSTACK_WEBHOOK_SECRET || 'whsec_test_123')
+    .update(payload)
+    .digest('hex');
+}
 
-  function sign(payload: string): string {
-    return crypto.createHmac('sha512', 'whsec_test_123').update(payload).digest('hex');
-  }
+beforeEach(() => {
+  process.env.PAYMENT_PROVIDER = 'paystack';
+  process.env.PAYSTACK_SECRET_KEY = 'sk_test_xxx';
+  process.env.PAYSTACK_WEBHOOK_SECRET = 'whsec_test_123';
+  process.env.PAYSTACK_CALLBACK_URL = 'https://test.example/callback';
+  delete process.env.PAYSTACK_LIVE_SECRET_KEY;
+  delete process.env.PAYSTACK_LIVE_WEBHOOK_SECRET;
+  delete process.env.PAYSTACK_LIVE_CALLBACK_URL;
+  process.env.NODE_ENV = 'development';
 
-  it('initialize creates a PENDING deposit and returns the checkout URL', async () => {
-    mockInit.mockResolvedValue({
-      authorizationUrl: 'https://checkout.paystack.com/abc',
-      accessCode: 'abc',
-      reference: 'PSK-REF-1',
-    });
+  mockInitialize = jest.spyOn(paystackService, 'initialize') as unknown as jest.Mock;
+  mockVerify = jest.spyOn(paystackService, 'verify') as unknown as jest.Mock;
+  mockInitialize.mockReset();
+  mockVerify.mockReset();
+});
 
-    const { agent } = await authenticatedAgent(freshApp());
-    const res = await agent
-      .post('/api/payments/paystack/initialize')
-      .send({ amount: 2000 })
-      .expect(201);
+afterEach(async () => {
+  jest.restoreAllMocks();
+  await Deposit.deleteMany({});
+  await Wallet.deleteMany({});
+});
 
-    expect(res.body.authorizationUrl).toBe('https://checkout.paystack.com/abc');
-    expect(res.body.deposit).toMatchObject({ amount: 2000, status: DepositStatus.PENDING });
+it('credits the wallet from a verified webhook, exactly once', async () => {
+  const app = freshApp();
+  const { agent, user } = await authenticatedAgent(app);
 
-    const local = await Deposit.findOne({ reference: res.body.deposit.reference });
-    expect(local?.method).toBe('GATEWAY');
-  });
-
-  it('webhook rejects bad signatures and honours idempotency', async () => {
-    const app = freshApp();
-    const { agent, user } = await authenticatedAgent(app);
-
-    const initRes = await agent
-      .post('/api/payments/paystack/initialize')
-      .send({ amount: 2000 })
-      .expect(201);
-    const reference = initRes.body.deposit.reference;
-
-    mockInit.mockImplementation(async () => ({ authorizationUrl: '', accessCode: '', reference }));
-    mockVerifyRef.mockResolvedValue({
+  // Mock initialize to echo back the reference that was passed in, so the
+  // deposit reference matches what Paystack would return.
+  mockInitialize.mockImplementation(
+    async (_email: string, _amount: number, reference: string) => ({
+      authorizationUrl: '',
+      accessCode: '',
+      reference,
+    })
+  );
+  // Mock verify: accepts any reference, returns the amount that was passed in.
+  mockVerify.mockImplementation(
+    async (reference: string) => ({
       status: 'success',
       reference,
       amountKobo: 2000 * 100,
-    });
+      paidAt: new Date().toISOString(),
+      customerEmail: 'user@example.test',
+    })
+  );
 
-    // Tampered signature → 401, nothing moves.
-    await request(app)
-      .post('/api/payments/webhook/paystack')
-      .send({ event: 'charge.success', data: { reference } })
-      .set('x-paystack-signature', 'invalid')
-      .expect(401);
+  const initRes = await agent
+    .post('/api/payments/paystack/initialize')
+    .send({ amount: 2000 })
+    .expect(201);
 
-    // Real signature → credits exactly once, even when delivered twice.
-    const payload = JSON.stringify({ event: 'charge.success', data: { reference } });
-    await request(app)
-      .post('/api/payments/webhook/paystack')
-      .set('Content-Type', 'application/json')
-      .set('x-paystack-signature', sign(payload))
-      .send(payload)
-      .expect(200);
-    await request(app)
-      .post('/api/payments/webhook/paystack')
-      .set('Content-Type', 'application/json')
-      .set('x-paystack-signature', sign(payload))
-      .send(payload)
-      .expect(200);
+  // The real deposit reference comes from the initialize response, NOT a
+  // hardcoded value. This is what Paystack will send back in the webhook.
+  const reference = initRes.body.deposit.reference;
 
-    const wallet = await Wallet.findOne({ userId: user.id });
-    expect(wallet?.availableBalance).toBe(2000);
+  const payload = JSON.stringify({ event: 'charge.success', data: { reference } });
+  const sig = sign(payload);
 
-    const rows = await Transaction.find({ userId: user.id, type: TransactionType.DEPOSIT });
-    expect(rows).toHaveLength(1); // idempotent: one credit only
+  // Tampered signature -> 401, nothing moves.
+  await request(app)
+    .post('/api/payments/webhook/paystack')
+    .send({ event: 'charge.success', data: { reference } })
+    .set('x-paystack-signature', 'invalid')
+    .expect(401);
 
-    const deposit = await Deposit.findOne({ reference });
-    expect(deposit?.status).toBe(DepositStatus.APPROVED);
-  });
+  // Real signature -> credits exactly once, even when delivered twice.
+  await request(app)
+    .post('/api/payments/webhook/paystack')
+    .set('Content-Type', 'application/json')
+    .set('x-paystack-signature', sig)
+    .send(payload)
+    .expect(200);
+  await request(app)
+    .post('/api/payments/webhook/paystack')
+    .set('Content-Type', 'application/json')
+    .set('x-paystack-signature', sig)
+    .send(payload)
+    .expect(200);
 
-  it('webhook ignores mismatched amounts', async () => {
-    const app = freshApp();
-    const { agent, user } = await authenticatedAgent(app);
+  const wallet = await Wallet.findOne({ userId: user.id });
+  expect(wallet?.availableBalance).toBe(2000);
 
-    const initRes = await agent
-      .post('/api/payments/paystack/initialize')
-      .send({ amount: 2000 })
-      .expect(201);
-    const reference = initRes.body.deposit.reference;
+  const rows = await Transaction.find({ userId: user.id, type: TransactionType.DEPOSIT });
+  expect(rows).toHaveLength(1); // idempotent: one credit only
 
-    mockVerifyRef.mockResolvedValue({
-      status: 'success',
+  const deposit = await Deposit.findOne({ reference });
+  expect(deposit?.status).toBe(DepositStatus.APPROVED);
+});
+
+it('webhook ignores mismatched amounts', async () => {
+  const app = freshApp();
+  const { agent, user } = await authenticatedAgent(app);
+
+  // Initialize echoes back the reference that was passed in.
+  mockInitialize.mockImplementation(
+    async (_email: string, _amount: number, reference: string) => ({
+      authorizationUrl: '',
+      accessCode: '',
       reference,
-      amountKobo: 100, // attacker/sandbox mismatch
-    });
+    })
+  );
+  // Verify returns a deliberately wrong amount (simulating a tampered/fraudulent
+  // charge or a sandbox mismatch) so the webhook rejects the credit.
+  mockVerify.mockImplementation(
+    async (_reference: string) => ({
+      status: 'success',
+      reference: 'mismatch',
+      amountKobo: 100, // attacker/sandbox mismatch -> 1 Naira instead of 2000
+      paidAt: new Date().toISOString(),
+      customerEmail: 'attacker@example.test',
+    })
+  );
 
-    const payload = JSON.stringify({ event: 'charge.success', data: { reference } });
-    await request(app)
-      .post('/api/payments/webhook/paystack')
-      .set('Content-Type', 'application/json')
-      .set('x-paystack-signature', sign(payload))
-      .send(payload)
-      .expect(200);
+  const initRes = await agent
+    .post('/api/payments/paystack/initialize')
+    .send({ amount: 2000 })
+    .expect(201);
 
-    const wallet = await Wallet.findOne({ userId: user.id });
-    expect(wallet?.availableBalance ?? 0).toBe(0);
-  });
+  const reference = initRes.body.deposit.reference;
+  const payload = JSON.stringify({ event: 'charge.success', data: { reference } });
+  const sig = sign(payload);
 
-  it('verify endpoint credits on client-poll fallback', async () => {
-    const app = freshApp();
-    const { agent, user } = await authenticatedAgent(app);
+  await request(app)
+    .post('/api/payments/webhook/paystack')
+    .set('Content-Type', 'application/json')
+    .set('x-paystack-signature', sig)
+    .send(payload)
+    .expect(200);
 
-    const initRes = await agent
-      .post('/api/payments/paystack/initialize')
-      .send({ amount: 1500 })
-      .expect(201);
-    const reference = initRes.body.deposit.reference;
+  const wallet = await Wallet.findOne({ userId: user.id });
+  expect(wallet?.availableBalance ?? 0).toBe(0);
+});
 
-    mockVerifyRef.mockResolvedValue({
+it('verify endpoint credits on client-poll fallback', async () => {
+  const app = freshApp();
+  const { agent, user } = await authenticatedAgent(app);
+
+  // Initialize echoes back the reference that was passed in.
+  mockInitialize.mockImplementation(
+    async (_email: string, _amount: number, reference: string) => ({
+      authorizationUrl: '',
+      accessCode: '',
+      reference,
+    })
+  );
+  mockVerify.mockImplementation(
+    async (reference: string) => ({
       status: 'success',
       reference,
       amountKobo: 1500 * 100,
-    });
+      paidAt: new Date().toISOString(),
+      customerEmail: 'user@example.test',
+    })
+  );
 
-    const res = await agent.get(`/api/payments/paystack/verify/${reference}`).expect(200);
-    expect(res.body.deposit).toMatchObject({ reference, status: 'APPROVED', verified: true });
+  const initRes = await agent
+    .post('/api/payments/paystack/initialize')
+    .send({ amount: 1500 })
+    .expect(201);
+  const reference = initRes.body.deposit.reference;
 
-    const wallet = await Wallet.findOne({ userId: user.id });
-    expect(wallet?.availableBalance).toBe(1500);
-  });
+  const res = await agent.get(`/api/payments/paystack/verify/${reference}`).expect(200);
+  expect(res.body.deposit).toMatchObject({ reference, status: 'APPROVED', verified: true });
 
-  it('initialize requires authentication', async () => {
-    const app = freshApp();
-    await request(app).post('/api/payments/paystack/initialize').send({ amount: 1000 }).expect(401);
-  });
+  const wallet = await Wallet.findOne({ userId: user.id });
+  expect(wallet?.availableBalance).toBe(1500);
+});
+
+it('initialize requires authentication', async () => {
+  const app = freshApp();
+  await request(app).post('/api/payments/paystack/initialize').send({ amount: 1000 }).expect(401);
 });

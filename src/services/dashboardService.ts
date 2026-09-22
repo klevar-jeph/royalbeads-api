@@ -3,7 +3,7 @@
 // user: real wallet balances, VIP level, daily task counters, referral
 // placeholders and unread notification count.
 
-import { User, AccountStatus } from '../models/User';
+import { User } from '../models/User';
 import { Notification } from '../models/Notification';
 import { DashboardSummaryDTO } from '../types/dto';
 import { getLevelByTier, VIP_LEVELS } from '../config/vipLevels';
@@ -37,7 +37,7 @@ export const dashboardService = {
         role: user.role,
         status: user.status,
         referralCode: user.referralCode,
-        emailVerified: user.status === AccountStatus.ACTIVE,
+        emailVerified: true,
       },
       // --- Wallet: real balances (Phase 5) ---------------------------------
       availableBalance: wallet.availableBalance,

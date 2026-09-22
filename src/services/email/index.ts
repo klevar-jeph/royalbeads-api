@@ -69,17 +69,8 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
 
 // --- Typed helpers for auth flows -----------------------------------------
 
-export function sendVerificationEmail(to: string, token: string): Promise<void> {
-  const verifyUrl = `${env.frontendUrl}/verify-email?token=${encodeURIComponent(token)}`;
-  return sendEmail({
-    to,
-    subject: 'Verify your Royalbeads account',
-    text: `Welcome to Royalbeads!\n\nPlease verify your email by visiting the following link:\n${verifyUrl}\n\nThis link expires in 24 hours.\n\nIf you did not create an account, you can ignore this email.`,
-  });
-}
-
 export function sendPasswordResetEmail(to: string, token: string): Promise<void> {
-  const resetUrl = `${env.frontendUrl}/reset-password?token=${encodeURIComponent(token)}`;
+  const resetUrl = `${env.frontendUrl}/settings?resetToken=${encodeURIComponent(token)}`;
   return sendEmail({
     to,
     subject: 'Reset your Royalbeads password',

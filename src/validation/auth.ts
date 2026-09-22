@@ -65,18 +65,6 @@ export const refreshSchema = z.object({
     .optional(),
 });
 
-export const emailVerificationSchema = z.object({
-  body: z.object({
-    token: tokenField,
-  }),
-});
-
-export const resendVerificationSchema = z.object({
-  body: z.object({
-    email: emailField,
-  }),
-});
-
 export const forgotPasswordSchema = z.object({
   body: z.object({
     email: emailField,
@@ -101,8 +89,6 @@ export type AuthSchemas = {
   register: typeof registerSchema;
   login: typeof loginSchema;
   refresh: typeof refreshSchema;
-  verifyEmail: typeof emailVerificationSchema;
-  resendVerification: typeof resendVerificationSchema;
   forgotPassword: typeof forgotPasswordSchema;
   resetPassword: typeof resetPasswordSchema;
   changePassword: typeof changePasswordSchema;
