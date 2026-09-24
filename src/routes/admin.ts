@@ -143,6 +143,31 @@ adminRouter.post('/withdrawals/:id/paid', async (req: Request, res: Response, ne
   }
 });
 
+/** GET /api/admin/paystack/balance — current platform Paystack balance (kobo). */
+adminRouter.get('/paystack/balance', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const balance = await paystackService.getBalance();
+    res.json({ balance });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** GET /api/admin/paystack/transactions?limit= — recent Paystack activity. */
+adminRouter.get(
+  '/paystack/transactions',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = Number.parseInt(String(req.query.limit ?? '20'), 10);
+      const limit = Number.isNaN(parsed) ? 20 : Math.min(Math.max(parsed, 1), 100);
+      const transactions = await paystackService.listTransactions(limit);
+      res.json({ transactions });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 /**
  * GET /api/admin/stats
  * Platform-wide counters for the admin dashboard.
