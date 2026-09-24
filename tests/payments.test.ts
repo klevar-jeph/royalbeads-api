@@ -3,15 +3,18 @@
 
 import request from 'supertest';
 import type { Express } from 'express';
+import crypto from 'crypto';
 import { freshApp, authenticatedAgent, TEST_USER } from './helpers';
 import { User, UserRole, AccountStatus } from '../src/models/User';
 import { Wallet } from '../src/models/Wallet';
 import { Transaction, TransactionType } from '../src/models/Transaction';
 import { Deposit, DepositStatus } from '../src/models/Deposit';
 import { Withdrawal, WithdrawalStatus } from '../src/models/Withdrawal';
+import { Notification } from '../src/models/Notification';
 import { taskService } from '../src/services/taskService';
 import { Task } from '../src/models/Task';
 import { paystackService } from '../src/services/paystackService';
+import { walletService } from '../src/services/walletService';
 
 const ADMIN = {
   fullName: 'Ops Admin',
@@ -44,6 +47,38 @@ const BANK = { bankName: 'GTB', accountNumber: '0123456789', accountName: 'Test 
 // Deposits are ALWAYS direct Paystack checkouts — spy on the gateway so the
 // deposit endpoints can be exercised without real HTTP calls.
 let mockInitialize: jest.Mock;
+let mockVerify: jest.Mock;
+
+/**
+ * Deliver a verified `charge.success` webhook for a deposit as Paystack
+ * would — this is the ONLY path through which a deposit credits the wallet.
+ * Returns after the wallet must have been credited.
+ */
+async function confirmDepositViaWebhook(
+  app: Express,
+  reference: string,
+  amountNaira: number
+): Promise<void> {
+  mockVerify.mockReset();
+  mockVerify.mockImplementation(async (ref: string) => ({
+    status: 'success',
+    reference: ref,
+    amountKobo: amountNaira * 100,
+    paidAt: new Date().toISOString(),
+    customerEmail: 'user@example.test',
+  }));
+  const payload = JSON.stringify({ event: 'charge.success', data: { reference } });
+  const sig = crypto
+    .createHmac('sha512', process.env.PAYSTACK_WEBHOOK_SECRET || 'whsec_test_123')
+    .update(payload)
+    .digest('hex');
+  await request(app)
+    .post('/api/payments/webhook/paystack')
+    .set('Content-Type', 'application/json')
+    .set('x-paystack-signature', sig)
+    .send(payload)
+    .expect(200);
+}
 
 beforeEach(() => {
   process.env.PAYMENT_PROVIDER = 'paystack';
@@ -62,6 +97,8 @@ beforeEach(() => {
       reference,
     })
   );
+  mockVerify = jest.spyOn(paystackService, 'verify') as unknown as jest.Mock;
+  mockVerify.mockReset();
 });
 
 afterEach(() => {
@@ -99,7 +136,7 @@ describe('Deposits', () => {
     void user;
   });
 
-  it('admin review still works on pending deposits (legacy/manual rows)', async () => {
+  it('the admin deposits queue is read-only — no review endpoint', async () => {
     const app = freshApp();
     const { agent, user } = await authenticatedAgent(app);
     const admin = await adminAgent(app);
@@ -109,42 +146,30 @@ describe('Deposits', () => {
       .send({ amount: 5000 })
       .expect(201);
 
+    // The reconciliation list is visible to admins …
     const queue = await admin.get('/api/admin/deposits?status=PENDING').expect(200);
     expect(queue.body.deposits).toHaveLength(1);
 
+    // … but there is deliberately no approve/reject endpoint: money enters
+    // the wallet ONLY through the Paystack webhook. Any review path 404s.
     await admin
       .post(`/api/admin/deposits/${created.body.deposit.id}/review`)
       .send({ decision: 'APPROVE', note: 'payment seen' })
-      .expect(200);
+      .expect(404);
 
+    // The wallet is untouched until Paystack confirms the charge.
+    expect((await Wallet.findOne({ userId: user.id }))?.availableBalance ?? 0).toBe(0);
+
+    // Crediting still happens — via the webhook, not the admin console.
+    await confirmDepositViaWebhook(app, created.body.deposit.reference, 5000);
     const wallet = await Wallet.findOne({ userId: user.id });
     expect(wallet?.availableBalance).toBe(5000);
-
     const ledger = await Transaction.findOne({ userId: user.id, type: TransactionType.DEPOSIT });
     expect(ledger).toMatchObject({ amount: 5000 });
 
-    await admin
-      .post(`/api/admin/deposits/${created.body.deposit.id}/review`)
-      .send({ decision: 'APPROVE' })
-      .expect(409);
-  });
-
-  it('rejected deposits do not credit the wallet', async () => {
-    const app = freshApp();
-    const { agent, user } = await authenticatedAgent(app);
-    const admin = await adminAgent(app);
-
-    const created = await agent.post('/api/wallet/deposits').send({ amount: 2000 }).expect(201);
-    await admin
-      .post(`/api/admin/deposits/${created.body.deposit.id}/review`)
-      .send({ decision: 'REJECT', note: 'no payment found' })
-      .expect(200);
-
-    const wallet = await Wallet.findOne({ userId: user.id });
-    // No wallet document is ever created on the reject-only path (zero movement).
-    expect(wallet?.availableBalance ?? 0).toBe(0);
-    const deposit = await Deposit.findById(created.body.deposit.id);
-    expect(deposit?.status).toBe(DepositStatus.REJECTED);
+    // A replayed webhook is idempotent — one ledger entry only.
+    await confirmDepositViaWebhook(app, created.body.deposit.reference, 5000);
+    expect(await Transaction.countDocuments({ userId: user.id, type: TransactionType.DEPOSIT })).toBe(1);
   });
 
   it('lists the user deposit history', async () => {
@@ -169,13 +194,10 @@ describe('Withdrawals', () => {
     const { agent, user } = await authenticatedAgent(app);
     const admin = await adminAgent(app);
 
-    await seedBalance(user.id); // +50
-    await agent.post('/api/wallet/deposits').send({ amount: 5000 }).expect(201);
-    const deposits = (await agent.get('/api/wallet/deposits').expect(200)).body.deposits;
-    await admin
-      .post(`/api/admin/deposits/${deposits[0].id}/review`)
-      .send({ decision: 'APPROVE' })
-      .expect(200);
+    await seedBalance(user.id); // +50 via a task reward
+    // Top up to 5050 through the ONLY credit path: the Paystack webhook.
+    const topup = await agent.post('/api/wallet/deposits').send({ amount: 5000 }).expect(201);
+    await confirmDepositViaWebhook(app, topup.body.deposit.reference, 5000);
 
     const created = await agent
       .post('/api/wallet/withdrawals')
@@ -214,12 +236,6 @@ describe('Withdrawals', () => {
     const admin = await adminAgent(app);
 
     await seedBalance(user.id); // +50
-    await agent.post('/api/wallet/deposits').send({ amount: 5000 }).expect(201);
-    const deposits = (await agent.get('/api/wallet/deposits').expect(200)).body.deposits;
-    await admin
-      .post(`/api/admin/deposits/${deposits[0].id}/review`)
-      .send({ decision: 'APPROVE' })
-      .expect(200);
 
     // Manually drain the wallet to simulate a stale/insufficient balance.
     await Wallet.updateOne({ userId: user.id }, { $set: { availableBalance: 10 } });

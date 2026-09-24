@@ -33,8 +33,6 @@ export interface IUser extends Document {
   status: AccountStatus;
   referralCode: string;
   referredBy?: Types.ObjectId;
-  passwordResetToken?: string;
-  passwordResetExpires?: Date;
   preferences: NotificationPreferences;
   lastLoginAt?: Date;
   /** Active VIP tier index (0 = R0 Starter … 9 = R9 Crown). */
@@ -71,8 +69,6 @@ const UserSchema = new Schema<IUser>(
     },
     referralCode: { type: String, unique: true },
     referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    passwordResetToken: { type: String, select: false },
-    passwordResetExpires: { type: Date, select: false },
     preferences: { type: PreferencesSchema, default: () => ({}) },
     lastLoginAt: { type: Date },
     vipLevel: { type: Number, default: 0, min: 0, max: 9 },
@@ -80,10 +76,6 @@ const UserSchema = new Schema<IUser>(
   },
   { timestamps: true }
 );
-
-// Index for lookup by password reset token (kept out of the default
-// projection via `select: false` above).
-UserSchema.index({ passwordResetToken: 1 }, { sparse: true });
 
 // Generate a unique 8-character referral code.
 UserSchema.statics.generateReferralCode = async function (): Promise<string> {

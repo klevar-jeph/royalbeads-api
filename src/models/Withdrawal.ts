@@ -26,6 +26,10 @@ export interface IWithdrawal extends Document {
   reviewedBy?: Types.ObjectId;
   reviewNote?: string;
   reviewedAt?: Date;
+  /** Set when the withdrawal is approved. */
+  approvedAt?: Date;
+  /** Payout window communicated to the user (72 working hours after approval). */
+  payoutEta?: Date;
   paidAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -48,6 +52,8 @@ const WithdrawalSchema = new Schema<IWithdrawal>(
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     reviewNote: { type: String, trim: true, maxlength: 500 },
     reviewedAt: { type: Date },
+    approvedAt: { type: Date },
+    payoutEta: { type: Date },
     paidAt: { type: Date },
   },
   { timestamps: true }

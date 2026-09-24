@@ -37,7 +37,7 @@ export const authLimiter = rateLimit({
 });
 
 /**
- * Very strict limiter for password reset and email verification resend routes.
+ * Very strict limiter for password-change and other sensitive account routes.
  */
 export const sensitiveLimiter = rateLimit({
   ...baseOptions,

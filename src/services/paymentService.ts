@@ -4,8 +4,8 @@
 // Deposits: ALWAYS a direct Paystack checkout — createDeposit() calls
 //   Paystack's /transaction/initialize and returns the authorization URL for
 //   the browser to redirect. The wallet is credited idempotently by the
-//   webhook (charge.success) — no admin step and no sender information.
-//   (The admin deposit-review endpoints remain for legacy BANK_TRANSFER rows.)
+//   webhook (charge.success) via confirmDeposit() — no admin step and no
+//   sender information.
 // Withdrawals: user submits bank details; approval debits the wallet
 //   immediately (guarded, so an overdraft is impossible) and marks the request
 //   APPROVED; an admin later flips it to PAID after the transfer settles.
@@ -16,9 +16,14 @@ import { TransactionType } from '../models/Transaction';
 import { walletService } from './walletService';
 import { referralService } from './referralService';
 import { Notification, NotificationType } from '../models/Notification';
+import { sendEmail } from './email';
 import { env } from '../config/env';
 import { paystackService } from './paystackService';
 import { Types } from 'mongoose';
+
+/** Payout window communicated to users: 24–72 working hours. */
+const PAYOUT_WINDOW_TEXT = '24–72 working hours';
+const PAYOUT_WINDOW_HOURS = 72;
 
 function httpError(status: number, message: string): Error & { status: number } {
   const err = new Error(message) as Error & { status: number };
@@ -106,7 +111,7 @@ export const paymentService = {
     return Deposit.find(query).sort({ createdAt: -1 }).limit(Math.min(options.limit ?? 20, 100));
   },
 
-  async reviewDeposit(
+  async confirmDeposit(
     depositId: string | Types.ObjectId,
     reviewerId: string | Types.ObjectId,
     decision: 'APPROVE' | 'REJECT',
@@ -254,14 +259,32 @@ export const paymentService = {
     withdrawal.reviewedBy = new Types.ObjectId(reviewerId.toString());
     withdrawal.reviewNote = note;
     withdrawal.reviewedAt = new Date();
+    withdrawal.approvedAt = new Date();
+    withdrawal.payoutEta = new Date(Date.now() + PAYOUT_WINDOW_HOURS * 60 * 60 * 1000);
     await withdrawal.save();
 
+    const approvedMessage = `Your withdrawal of ₦${withdrawal.amount.toLocaleString()} has been approved and will be received in your ${withdrawal.bankName} account within ${PAYOUT_WINDOW_TEXT}.`;
     await Notification.create({
       userId: withdrawal.userId,
       type: NotificationType.WALLET,
       title: 'Withdrawal approved',
-      message: `Your withdrawal of ₦${withdrawal.amount.toLocaleString()} has been approved and will be transferred to ${withdrawal.bankName}.`,
+      message: approvedMessage,
     });
+
+    // Best-effort email with the payout window (never blocks the approval).
+    try {
+      const { User } = await import('../models/User');
+      const user = await User.findById(withdrawal.userId).select('email');
+      if (user) {
+        await sendEmail({
+          to: user.email,
+          subject: `Withdrawal approved — ${withdrawal.reference}`,
+          text: `${approvedMessage}\n\nReference: ${withdrawal.reference}\nAmount: ₦${withdrawal.amount.toLocaleString()}\nBank: ${withdrawal.bankName} — ${withdrawal.accountNumber}\n\n— ${env.frontendUrl}`,
+        });
+      }
+    } catch {
+      // Email delivery is best-effort; the in-app notification already exists.
+    }
 
     return withdrawal;
   },

@@ -99,9 +99,9 @@ paymentsRouter.post(
         return res.json({ received: true, verified: false });
       }
 
-      // Idempotently credit the wallet via the existing review path.
-      const systemReviewer = deposit.userId; // reviewed "by system" paper trail
-      await paymentService.reviewDeposit(
+      // Idempotently credit the wallet via the confirmation path.
+      const systemReviewer = deposit.userId; // confirmed "by system" paper trail
+      await paymentService.confirmDeposit(
         deposit._id,
         systemReviewer,
         'APPROVE',
@@ -137,7 +137,7 @@ paymentsRouter.get(
         return res.json({ deposit: { reference: deposit.reference, status: deposit.status, verified: false } });
       }
 
-      await paymentService.reviewDeposit(
+      await paymentService.confirmDeposit(
         deposit._id,
         req.user!.id,
         'APPROVE',

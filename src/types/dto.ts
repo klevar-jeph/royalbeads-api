@@ -129,8 +129,6 @@ export const PROTECTED_USER_FIELDS: readonly string[] = [
   'referredBy',
   'referralCode',
   'passwordHash',
-  'passwordResetToken',
-  'passwordResetExpires',
   'lastLoginAt',
   'createdAt',
   'updatedAt',

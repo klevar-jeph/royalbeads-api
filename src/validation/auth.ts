@@ -25,8 +25,6 @@ const passwordField = z
   .refine((v) => /[a-z]/.test(v), 'Password must contain a lowercase letter.')
   .refine((v) => /\d/.test(v), 'Password must contain a number.');
 
-const tokenField = z.string().trim().min(1, 'Token is required.');
-
 // --- Schemas ---------------------------------------------------------------
 
 export const registerSchema = z.object({
@@ -65,19 +63,6 @@ export const refreshSchema = z.object({
     .optional(),
 });
 
-export const forgotPasswordSchema = z.object({
-  body: z.object({
-    email: emailField,
-  }),
-});
-
-export const resetPasswordSchema = z.object({
-  body: z.object({
-    token: tokenField,
-    password: passwordField,
-  }),
-});
-
 export const changePasswordSchema = z.object({
   body: z.object({
     currentPassword: z.string().min(1, 'Current password is required.'),
@@ -89,8 +74,6 @@ export type AuthSchemas = {
   register: typeof registerSchema;
   login: typeof loginSchema;
   refresh: typeof refreshSchema;
-  forgotPassword: typeof forgotPasswordSchema;
-  resetPassword: typeof resetPasswordSchema;
   changePassword: typeof changePasswordSchema;
 };
 

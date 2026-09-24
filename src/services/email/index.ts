@@ -5,9 +5,9 @@
 //   - "console" (default for dev): logs the rendered email to stdout.
 //   - "smtp": uses nodemailer with the SMTP settings from env vars.
 //
-// The public API is intentionally tiny – `sendEmail` and a handful of typed
-// helpers for the common auth flows. Templates are plain strings so that a
-// future migration to a templating engine does not change call sites.
+// The public API is intentionally tiny – `sendEmail` plus notification copy
+// built at call sites. Templates are plain strings so that a future migration
+// to a templating engine does not change call sites.
 
 import nodemailer, { Transporter } from 'nodemailer';
 import { env } from '../../config/env';
@@ -68,12 +68,7 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
 }
 
 // --- Typed helpers for auth flows -----------------------------------------
-
-export function sendPasswordResetEmail(to: string, token: string): Promise<void> {
-  const resetUrl = `${env.frontendUrl}/settings?resetToken=${encodeURIComponent(token)}`;
-  return sendEmail({
-    to,
-    subject: 'Reset your Royalbeads password',
-    text: `You requested a password reset.\n\nReset your password here:\n${resetUrl}\n\nThis link expires in 1 hour.\n\nIf you did not request a reset, you can safely ignore this email.`,
-  });
-}
+//
+// NOTE: the self-service forgot/reset password flow was removed by design.
+// A signed-in user changes their password via POST /users/me/password/change
+// (current password required); admins reset passwords via the admin console.

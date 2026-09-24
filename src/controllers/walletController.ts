@@ -42,6 +42,8 @@ function toWithdrawalDTO(w: IWithdrawal) {
     reviewNote: w.reviewNote,
     createdAt: w.createdAt.toISOString(),
     reviewedAt: w.reviewedAt?.toISOString(),
+    approvedAt: w.approvedAt?.toISOString(),
+    payoutEta: w.payoutEta?.toISOString(),
     paidAt: w.paidAt?.toISOString(),
   };
 }

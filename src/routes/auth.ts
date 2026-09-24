@@ -9,9 +9,9 @@
 //   GET  /auth/me                  – current user profile (requires auth)
 //   POST /auth/change-password     – change password for the authenticated user
 //
-// NOTE: Email verification is intentionally NOT required — accounts are
-// fully ACTIVE immediately upon registration. Password-reset endpoints
-// live under /users/* (authenticated, account-settings) rather than /auth/*.
+// NOTE: Accounts are ACTIVE immediately upon registration — there is no
+// email-verification step and no forgot/reset password flow. A signed-in user
+// changes their password via POST /users/me/password/change.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { User, UserRole, AccountStatus } from '../models/User';
