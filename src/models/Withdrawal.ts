@@ -31,6 +31,10 @@ export interface IWithdrawal extends Document {
   /** Payout window communicated to the user (72 working hours after approval). */
   payoutEta?: Date;
   paidAt?: Date;
+  /** Paystack payout recipient and transfer reference, if initiated. */
+  payoutRecipientCode?: string;
+  payoutReference?: string;
+  payoutStatus?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -55,6 +59,9 @@ const WithdrawalSchema = new Schema<IWithdrawal>(
     approvedAt: { type: Date },
     payoutEta: { type: Date },
     paidAt: { type: Date },
+    payoutRecipientCode: { type: String },
+    payoutReference: { type: String },
+    payoutStatus: { type: String },
   },
   { timestamps: true }
 );

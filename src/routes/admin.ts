@@ -4,22 +4,22 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/role';
-import { UserRole } from '../models/User';
-import { User } from '../models/User';
-import { apiLimiter } from '../middleware/rateLimiter';
-import { paymentService } from '../services/paymentService';
+import { AccountStatus, User, UserRole } from '../models/User';
 import { adminService } from '../services/adminService';
 import { vipService } from '../services/vipService';
-import { AccountStatus } from '../models/User';
 import { Deposit, DepositStatus } from '../models/Deposit';
 import { Withdrawal, WithdrawalStatus } from '../models/Withdrawal';
 import { VipPurchase, VipPurchaseStatus } from '../models/VipPurchase';
+import { paymentService } from '../services/paymentService';
+import { paystackService } from '../services/paystackService';
 
 export const adminRouter = Router();
 
 adminRouter.use(requireAuth);
+// The global `/api` limiter already protects admin requests. Do not install the
+// same limiter again here: admin dashboards use SWR revalidation and a second
+// count caused legitimate queues to receive 429 responses.
 adminRouter.use(requireRole(UserRole.ADMIN, UserRole.SUPER_ADMIN));
-adminRouter.use(apiLimiter);
 
 function isFlagged(v: unknown): v is 'APPROVE' | 'REJECT' {
   return v === 'APPROVE' || v === 'REJECT';
@@ -89,7 +89,14 @@ adminRouter.get('/withdrawals', async (req: Request, res: Response, next: NextFu
       .populate('userId', 'fullName email')
       .sort({ createdAt: -1 })
       .limit(100);
-    res.json({ withdrawals });
+    // Admin actions use the stable DTO identifier. Raw Mongoose documents only
+    // expose `_id`, which made the client construct `/withdrawals/undefined`.
+    res.json({
+      withdrawals: withdrawals.map((withdrawal) => ({
+        ...withdrawal.toObject(),
+        id: withdrawal._id.toString(),
+      })),
+    });
   } catch (err) {
     next(err);
   }
@@ -365,6 +372,25 @@ adminRouter.get('/audit-logs', async (req: Request, res: Response, next: NextFun
       skip: Number.isNaN(skip) ? 0 : skip,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** GET /api/admin/paystack/balance — live Paystack ledger balance (kobo). */
+adminRouter.get('/paystack/balance', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json({ balance: await paystackService.getBalance() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** GET /api/admin/paystack/transactions — live Paystack transaction history. */
+adminRouter.get('/paystack/transactions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = req.query.limit ? Number.parseInt(String(req.query.limit), 10) : 20;
+    res.json({ transactions: await paystackService.listTransactions(Number.isNaN(limit) ? 20 : limit) });
   } catch (err) {
     next(err);
   }

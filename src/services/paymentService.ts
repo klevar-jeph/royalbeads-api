@@ -53,7 +53,7 @@ export const paymentService = {
           : undefined,
       minWithdrawal: env.minWithdrawal,
     };
-    },
+  },
 
   // --- Deposits ------------------------------------------------------------
 
@@ -239,7 +239,8 @@ export const paymentService = {
       return withdrawal;
     }
 
-    // Debit at approval; walletService guards against overdraft.
+    // Debit at approval; walletService guards against overdraft. The debit is
+    // rolled back if Paystack cannot initiate the payout.
     try {
       await walletService.debit(
         withdrawal.userId,
@@ -252,6 +253,40 @@ export const paymentService = {
       if ((err as { status?: number }).status === 422) {
         throw httpError(422, 'User no longer has sufficient balance for this withdrawal.');
       }
+      throw err;
+    }
+
+    try {
+      // Resolve the bank code, create a verified recipient, and initiate the
+      // Paystack payout before changing local status.
+      const banks = await paystackService.listBanks();
+      const bank = banks.find((candidate) => candidate.name.toLowerCase() === withdrawal.bankName.toLowerCase());
+      if (!bank) throw httpError(422, 'Paystack could not resolve the selected bank.');
+      const recipient = await paystackService.createRecipient({
+        name: withdrawal.accountName,
+        accountNumber: withdrawal.accountNumber,
+        bankCode: bank.code,
+      });
+      const payout = await paystackService.transfer({
+        amountNaira: withdrawal.amount,
+        recipientCode: recipient.recipientCode,
+        reference: newReference('PAY'),
+        reason: `Royalbeads withdrawal ${withdrawal.reference}`,
+      });
+      if (payout.status === 'failed' || payout.status === 'reversed') {
+        throw httpError(502, 'Paystack rejected the withdrawal payout.');
+      }
+      withdrawal.payoutRecipientCode = recipient.recipientCode;
+      withdrawal.payoutReference = payout.reference;
+      withdrawal.payoutStatus = payout.status;
+    } catch (err) {
+      await walletService.credit(
+        withdrawal.userId,
+        TransactionType.ADJUSTMENT,
+        withdrawal.amount,
+        `Withdrawal payout failed; approval reversed (${withdrawal.reference})`,
+        { meta: { withdrawalId: withdrawal._id.toString(), reason: (err as Error).message } }
+      );
       throw err;
     }
 

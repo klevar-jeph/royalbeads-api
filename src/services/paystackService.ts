@@ -105,6 +105,26 @@ export interface PaystackVerifyResult {
   customerEmail?: string;
 }
 
+export interface PaystackTransferResult {
+  reference: string;
+  transferCode?: string;
+  status: string;
+  recipientCode: string;
+}
+
+export interface PaystackAccountBalance {
+  available: number;
+  pending?: number;
+}
+
+export interface PaystackTransactionSummary {
+  reference: string;
+  amount: number;
+  status: string;
+  createdAt: string;
+  channel?: string;
+}
+
 export const paystackService = {
   /** True when the gateway path is usable (provider + secret key present). */
   isConfigured(): boolean {
@@ -176,6 +196,92 @@ export const paystackService = {
       paidAt: data.paid_at,
       customerEmail: data.customer?.email,
     };
+  },
+
+  /** Create a verified recipient for a withdrawal payout. */
+  async createRecipient(input: {
+    name: string;
+    accountNumber: string;
+    bankCode: string;
+  }): Promise<{ recipientCode: string; name: string; accountNumber: string; bankCode: string }> {
+    const data = await paystackFetch<{
+      recipient_code: string;
+      name: string;
+      account_number: string;
+      bank_code: string;
+    }>('/transfer/recipient', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'nuban',
+        name: input.name,
+        account_number: input.accountNumber,
+        bank_code: input.bankCode,
+        currency: 'NGN',
+      }),
+    });
+    return {
+      recipientCode: data.recipient_code,
+      name: data.name,
+      accountNumber: data.account_number,
+      bankCode: data.bank_code,
+    };
+  },
+
+  /** Initiate a NGN transfer from the platform Paystack balance. */
+  async transfer(input: {
+    amountNaira: number;
+    recipientCode: string;
+    reference: string;
+    reason: string;
+  }): Promise<PaystackTransferResult> {
+    if (!Number.isInteger(input.amountNaira) || input.amountNaira <= 0) {
+      throw paystackError(400, 'Transfer amount must be a positive whole Naira amount.');
+    }
+    const data = await paystackFetch<{
+      reference: string;
+      transfer_code?: string;
+      status: string;
+      recipient: { recipient_code: string };
+    }>('/transfer', {
+      method: 'POST',
+      body: JSON.stringify({
+        source: 'balance',
+        amount: input.amountNaira * 100,
+        recipient: input.recipientCode,
+        reference: input.reference,
+        reason: input.reason,
+      }),
+    });
+    return {
+      reference: data.reference,
+      transferCode: data.transfer_code,
+      status: data.status,
+      recipientCode: data.recipient.recipient_code,
+    };
+  },
+
+  /** Current Paystack ledger balance, in kobo. */
+  async getBalance(): Promise<PaystackAccountBalance> {
+    const data = await paystackFetch<{ available_balance?: number; pending_balance?: number }>('/balance');
+    return { available: data.available_balance ?? 0, pending: data.pending_balance };
+  },
+
+  /** Recent Paystack transactions, normalised for the admin console. */
+  async listTransactions(limit = 20): Promise<PaystackTransactionSummary[]> {
+    const data = await paystackFetch<Array<{
+      reference: string;
+      amount: number;
+      status: string;
+      created_at: string;
+      channel?: string;
+    }>>(`/transaction?perPage=${Math.min(Math.max(limit, 1), 100)}`);
+    return data.map((transaction) => ({
+      reference: transaction.reference,
+      amount: transaction.amount,
+      status: transaction.status,
+      createdAt: transaction.created_at,
+      channel: transaction.channel,
+    }));
   },
 
   /**

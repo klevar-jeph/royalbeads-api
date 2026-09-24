@@ -99,6 +99,8 @@ export const env = {
     paystackLiveWebhookSecret: process.env.PAYSTACK_LIVE_WEBHOOK_SECRET,
     paystackCallbackUrl: optional('PAYSTACK_CALLBACK_URL', ''),
     paystackLiveCallbackUrl: optional('PAYSTACK_LIVE_CALLBACK_URL', ''),
+    /** Paystack transfer recipient code for the platform account (required for payouts/upgrades). */
+    paystackPlatformRecipientCode: optional('PAYSTACK_PLATFORM_RECIPIENT_CODE', ''),
   },
 
   /** Referral commission percentage credited on a downline's first deposit (Phase 7). */

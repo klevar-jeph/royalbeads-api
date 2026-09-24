@@ -78,6 +78,8 @@ export interface VipLevelDTO {
   investment: number;
   dailyReturn: number;
   tier: number;
+  taskCount: number;
+  taskReward: number;
   description: string;
   status: string;
 }

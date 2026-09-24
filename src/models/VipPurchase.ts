@@ -24,6 +24,7 @@ export interface IVipPurchase extends Document {
   reviewedBy?: Types.ObjectId;
   reviewNote?: string;
   reviewedAt?: Date;
+  paystackReference?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,7 +32,7 @@ export interface IVipPurchase extends Document {
 const VipPurchaseSchema = new Schema<IVipPurchase>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    levelTier: { type: Number, required: true, min: 1, max: 9 },
+    levelTier: { type: Number, required: true, min: 0, max: 10 },
     levelCode: { type: String, required: true },
     levelName: { type: String, required: true },
     amount: { type: Number, required: true, min: 0 },
@@ -44,6 +45,7 @@ const VipPurchaseSchema = new Schema<IVipPurchase>(
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     reviewNote: { type: String, trim: true, maxlength: 500 },
     reviewedAt: { type: Date },
+    paystackReference: { type: String, trim: true },
   },
   { timestamps: true }
 );

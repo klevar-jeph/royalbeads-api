@@ -12,6 +12,10 @@ import { Notification, NotificationType } from '../models/Notification';
 import { VIP_LEVELS, getLevelByCode, getLevelByTier, levelsAbove, VipLevelConfig } from '../config/vipLevels';
 import { VipLevelDTO, VipStatusDTO, VipPurchaseDTO } from '../types/dto';
 import { Types } from 'mongoose';
+import { TransactionType } from '../models/Transaction';
+import { walletService } from './walletService';
+import { env } from '../config/env';
+import { paystackService } from './paystackService';
 
 function toLevelDTO(level: VipLevelConfig): VipLevelDTO {
   return {
@@ -21,6 +25,8 @@ function toLevelDTO(level: VipLevelConfig): VipLevelDTO {
     investment: level.investment,
     dailyReturn: level.dailyReturn,
     tier: level.tier,
+    taskCount: level.taskCount,
+    taskReward: level.taskReward,
     description: level.description,
     status: level.status,
   };
@@ -148,6 +154,42 @@ export const vipService = {
     if (!purchase) throw httpError(404, 'VIP purchase not found.');
     if (purchase.status !== VipPurchaseStatus.PENDING) {
       throw httpError(409, 'This purchase has already been reviewed.');
+    }
+
+    if (decision === 'APPROVE' && purchase.amount > 0) {
+      // The platform recipient guard prevents an upgrade from being recorded when
+      // Paystack cannot receive the membership payment.
+      if (!env.payments.paystackPlatformRecipientCode) {
+        throw httpError(503, 'Membership upgrades are unavailable until the Paystack platform recipient is configured.');
+      }
+      await walletService.debit(
+        purchase.userId,
+        TransactionType.VIP_PURCHASE,
+        purchase.amount,
+        `Membership upgrade payment: ${purchase.levelCode}`,
+        { meta: { vipPurchaseId: purchase._id.toString(), levelCode: purchase.levelCode } }
+      );
+      try {
+        const payment = await paystackService.transfer({
+          amountNaira: purchase.amount,
+          recipientCode: env.payments.paystackPlatformRecipientCode,
+          reference: `VIP-${purchase._id.toString()}`,
+          reason: `Royalbeads membership upgrade ${purchase.levelCode}`,
+        });
+        if (payment.status === 'failed' || payment.status === 'reversed') {
+          throw httpError(502, 'Paystack rejected the membership payment.');
+        }
+        await VipPurchase.updateOne({ _id: purchase._id }, { $set: { paystackReference: payment.reference } });
+      } catch (error) {
+        await walletService.credit(
+          purchase.userId,
+          TransactionType.ADJUSTMENT,
+          purchase.amount,
+          `Refund: Paystack membership payment failed (${purchase.levelCode})`,
+          { idempotencyKey: `vip-refund-${purchase._id.toString()}` }
+        );
+        throw error;
+      }
     }
 
     purchase.status =

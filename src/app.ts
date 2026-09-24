@@ -35,9 +35,20 @@ export function createApp(): Express {
 
   // --- Security middleware ----------------------------------------------
   app.use(helmet());
+  const allowedOrigins = [
+    env.frontendUrl,
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://royalbeads.pages.dev',
+  ].filter(Boolean);
+
   app.use(
     cors({
-      origin: env.frontendUrl,
+      origin: (origin, callback) => {
+        // Same-origin/server requests and CLI health checks have no Origin.
+        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error('Origin is not allowed by CORS.'));
+      },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
@@ -59,8 +70,13 @@ export function createApp(): Express {
     res.json({ status: 'ok', uptime: process.uptime() });
   });
 
-  // --- Rate limiting (global) ------------------------------------------
-  app.use('/api', apiLimiter);
+  // --- Rate limiting (general API) ---------------------------------------
+  // The admin console has its own authenticated routes and should not have
+  // its frequent SWR polling consume the shared public API quota.
+  app.use('/api', (req, res, next) => {
+    if (req.path.startsWith('/admin')) return next();
+    return apiLimiter(req, res, next);
+  });
 
   // --- Routes ------------------------------------------------------------
   app.use('/api/auth', authRouter);
