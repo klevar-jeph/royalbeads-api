@@ -34,6 +34,9 @@ function toWithdrawalDTO(w: IWithdrawal) {
   return {
     id: w._id.toString(),
     amount: w.amount,
+    fee: w.fee ?? 0,
+    netAmount: w.netAmount ?? w.amount,
+    feePercent: w.feePercent ?? 0,
     bankName: w.bankName,
     accountNumber: w.accountNumber,
     accountName: w.accountName,

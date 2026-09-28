@@ -10,6 +10,11 @@ import { Schema, model, Document, Types } from 'mongoose';
 export enum TransactionType {
   TASK_REWARD = 'TASK_REWARD',
   REFERRAL_COMMISSION = 'REFERRAL_COMMISSION',
+  TEAM_COMMISSION = 'TEAM_COMMISSION',
+  SALARY_CLAIM = 'SALARY_CLAIM',
+  LUCKY_DRAW_REWARD = 'LUCKY_DRAW_REWARD',
+  RED_ENVELOPE_REWARD = 'RED_ENVELOPE_REWARD',
+  WEEKLY_EVENT_REWARD = 'WEEKLY_EVENT_REWARD',
   VIP_PURCHASE = 'VIP_PURCHASE',
   DEPOSIT = 'DEPOSIT',
   WITHDRAWAL = 'WITHDRAWAL',
@@ -51,3 +56,4 @@ const TransactionSchema = new Schema<ITransaction>(
 TransactionSchema.index({ userId: 1, createdAt: -1 });
 
 export const Transaction = model<ITransaction>('Transaction', TransactionSchema);
+

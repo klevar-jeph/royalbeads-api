@@ -18,6 +18,9 @@ export enum WithdrawalStatus {
 export interface IWithdrawal extends Document {
   userId: Types.ObjectId;
   amount: number;
+  fee: number;
+  netAmount: number;
+  feePercent: number;
   bankName: string;
   accountNumber: string;
   accountName: string;
@@ -43,6 +46,14 @@ const WithdrawalSchema = new Schema<IWithdrawal>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     amount: { type: Number, required: true, min: 1 },
+    fee: { type: Number, default: 0, min: 0 },
+    netAmount: {
+      type: Number,
+      default: function (this: IWithdrawal) {
+        return this.amount;
+      },
+    },
+    feePercent: { type: Number, default: 0, min: 0 },
     bankName: { type: String, required: true, trim: true, maxlength: 120 },
     accountNumber: { type: String, required: true, trim: true, maxlength: 20 },
     accountName: { type: String, required: true, trim: true, maxlength: 120 },

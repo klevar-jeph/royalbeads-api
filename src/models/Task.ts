@@ -1,9 +1,8 @@
 // src/models/Task.ts
 // Task definitions for the daily tasks & rewards engine.
 //
-// Definitions are platform data (seeded from src/config/tasks.ts) so reward
-// amounts and availability rules can be tuned without code changes. Users
-// complete each active task at most once per UTC day.
+// Definitions are platform data so reward amounts and availability rules can
+// be tuned without code changes. Supports assignment to specific levels.
 
 import { Schema, model, Document } from 'mongoose';
 
@@ -16,6 +15,8 @@ export interface ITask extends Document {
   reward: number;
   /** Minimum VIP tier required to see/complete this task. */
   minVipTier: number;
+  /** Specific levels eligible for this task. E.g. ['R1', 'R2', 'R5'] */
+  assignedLevels: string[];
   /** Daily completion limit (1 = once per day). */
   dailyLimit: number;
   active: boolean;
@@ -30,7 +31,8 @@ const TaskSchema = new Schema<ITask>(
     title: { type: String, required: true, trim: true, maxlength: 120 },
     description: { type: String, required: true, trim: true, maxlength: 500 },
     reward: { type: Number, required: true, min: 0 },
-    minVipTier: { type: Number, default: 0, min: 0, max: 9 },
+    minVipTier: { type: Number, default: 0, min: 0, max: 10 },
+    assignedLevels: { type: [String], default: [] },
     dailyLimit: { type: Number, default: 1, min: 1, max: 50 },
     active: { type: Boolean, default: true, index: true },
     sortOrder: { type: Number, default: 0 },
@@ -39,3 +41,4 @@ const TaskSchema = new Schema<ITask>(
 );
 
 export const Task = model<ITask>('Task', TaskSchema);
+

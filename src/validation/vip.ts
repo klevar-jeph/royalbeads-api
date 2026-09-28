@@ -2,6 +2,10 @@
 // Zod validation schemas for VIP endpoints.
 
 import { z } from 'zod';
+import { VIP_LEVELS } from '../config/vipLevels';
+
+/** Valid membership codes come from the single level configuration source. */
+const LEVEL_CODES = VIP_LEVELS.map((level) => level.code);
 
 export const upgradeRequestSchema = z.object({
   body: z.object({
@@ -9,7 +13,9 @@ export const upgradeRequestSchema = z.object({
       .string()
       .trim()
       .toUpperCase()
-      .regex(/^R[0-9]$/, 'Level code must be one of R0–R9.'),
+      .refine((code) => LEVEL_CODES.includes(code), {
+        message: `Level code must be one of ${LEVEL_CODES.join(', ')}.`,
+      }),
   }),
 });
 

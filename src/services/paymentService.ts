@@ -19,6 +19,8 @@ import { Notification, NotificationType } from '../models/Notification';
 import { sendEmail } from './email';
 import { env } from '../config/env';
 import { paystackService } from './paystackService';
+import { systemSettingService } from './systemSettingService';
+
 import { Types } from 'mongoose';
 
 /** Payout window communicated to users: 24–72 working hours. */
@@ -168,8 +170,33 @@ export const paymentService = {
     userId: string | Types.ObjectId,
     input: { amount: number; bankName: string; accountNumber: string; accountName: string }
   ): Promise<IWithdrawal> {
-    if (input.amount < env.minWithdrawal) {
-      throw httpError(400, `Minimum withdrawal is ₦${env.minWithdrawal.toLocaleString()}.`);
+    const isAudit = await systemSettingService.isAuditModeActive();
+    if (isAudit) {
+      const settings = await systemSettingService.getSettings();
+      if (settings.auditDisableWithdrawals) {
+        throw httpError(403, 'Withdrawals are temporarily disabled for system audit.');
+      }
+    }
+
+    const settings = await systemSettingService.getSettings();
+    if (settings.withdrawalSuspended) {
+      throw httpError(403, 'Withdrawals are currently suspended.');
+    }
+
+    const minAmount = settings.minWithdrawal || env.minWithdrawal;
+    if (input.amount < minAmount) {
+      throw httpError(400, `Minimum withdrawal is ₦${minAmount.toLocaleString()}.`);
+    }
+
+    if (settings.maxWithdrawal && input.amount > settings.maxWithdrawal) {
+      throw httpError(400, `Maximum withdrawal is ₦${settings.maxWithdrawal.toLocaleString()}.`);
+    }
+
+    // Check withdrawal allowed days (e.g. Mon-Fri)
+    const now = new Date();
+    const dayOfWeek = now.getUTCDay();
+    if (settings.withdrawalDays && !settings.withdrawalDays.includes(dayOfWeek)) {
+      throw httpError(403, 'Withdrawals are not processed today according to schedule.');
     }
 
     const wallet = await walletService.getOrCreateWallet(userId);
@@ -177,9 +204,18 @@ export const paymentService = {
       throw httpError(422, 'Insufficient wallet balance.');
     }
 
+    // Inclusive fee calculation:
+    // Requested amount = ₦10,000; 10% fee = ₦1,000; Net = ₦9,000; Deduction = ₦10,000
+    const feePercent = settings.withdrawalFeeEnabled ? (settings.withdrawalFeePercent ?? 10) : 0;
+    const fee = Math.floor((input.amount * feePercent) / 100);
+    const netAmount = input.amount - fee;
+
     const withdrawal = await Withdrawal.create({
       userId,
       amount: input.amount,
+      fee,
+      netAmount,
+      feePercent,
       bankName: input.bankName,
       accountNumber: input.accountNumber,
       accountName: input.accountName,
@@ -191,7 +227,7 @@ export const paymentService = {
       userId,
       type: NotificationType.WALLET,
       title: 'Withdrawal submitted',
-      message: `Your withdrawal request of ₦${input.amount.toLocaleString()} (ref ${withdrawal.reference}) is awaiting approval.`,
+      message: `Your withdrawal request of ₦${input.amount.toLocaleString()} (fee ₦${fee.toLocaleString()}, net ₦${netAmount.toLocaleString()}) is awaiting approval.`,
     });
 
     return withdrawal;
@@ -240,7 +276,9 @@ export const paymentService = {
     }
 
     // Debit at approval; walletService guards against overdraft. The debit is
-    // rolled back if Paystack cannot initiate the payout.
+    // the authoritative financial movement — the withdrawal is approved and the
+    // user's balance is reduced by the full requested amount (the processing
+    // fee is INCLUDED in the requested amount, not added on top).
     try {
       await walletService.debit(
         withdrawal.userId,
@@ -256,43 +294,52 @@ export const paymentService = {
       throw err;
     }
 
+    // Automated Paystack payout is BEST-EFFORT. Approval must not fail because
+    // the gateway is unreachable or a bank cannot be resolved: the withdrawal
+    // still progresses to APPROVED and is settled either automatically (when
+    // the transfer is initiated here) or manually by an admin from the payout
+    // export/batch queue (APPROVED -> PAID). The wallet debit is never
+    // reverted here because a transport failure can hide a transfer that was
+    // actually accepted by the gateway.
     try {
-      // Resolve the bank code, create a verified recipient, and initiate the
-      // Paystack payout before changing local status.
-      const banks = await paystackService.listBanks();
-      const bank = banks.find((candidate) => candidate.name.toLowerCase() === withdrawal.bankName.toLowerCase());
-      if (!bank) throw httpError(422, 'Paystack could not resolve the selected bank.');
-      const recipient = await paystackService.createRecipient({
-        name: withdrawal.accountName,
-        accountNumber: withdrawal.accountNumber,
-        bankCode: bank.code,
-      });
-      const payout = await paystackService.transfer({
-        amountNaira: withdrawal.amount,
-        recipientCode: recipient.recipientCode,
-        reference: newReference('PAY'),
-        reason: `Royalbeads withdrawal ${withdrawal.reference}`,
-      });
-      if (payout.status === 'failed' || payout.status === 'reversed') {
-        throw httpError(502, 'Paystack rejected the withdrawal payout.');
+      if (paystackService.isConfigured()) {
+        const banks = await paystackService.listBanks();
+        const bank = banks.find(
+          (candidate) => candidate.name.toLowerCase() === withdrawal.bankName.toLowerCase()
+        );
+        if (!bank) {
+          withdrawal.payoutStatus = 'MANUAL_PENDING';
+        } else {
+          const recipient = await paystackService.createRecipient({
+            name: withdrawal.accountName,
+            accountNumber: withdrawal.accountNumber,
+            bankCode: bank.code,
+          });
+          const payout = await paystackService.transfer({
+            amountNaira: withdrawal.netAmount || withdrawal.amount,
+            recipientCode: recipient.recipientCode,
+            reference: newReference('PAY'),
+            reason: `Royalbeads withdrawal ${withdrawal.reference}`,
+          });
+          withdrawal.payoutRecipientCode = recipient.recipientCode;
+          withdrawal.payoutReference = payout.reference;
+          withdrawal.payoutStatus =
+            payout.status === 'failed' || payout.status === 'reversed' ? 'MANUAL_PENDING' : payout.status;
+        }
+      } else {
+        withdrawal.payoutStatus = 'MANUAL_PENDING';
       }
-      withdrawal.payoutRecipientCode = recipient.recipientCode;
-      withdrawal.payoutReference = payout.reference;
-      withdrawal.payoutStatus = payout.status;
     } catch (err) {
-      await walletService.credit(
-        withdrawal.userId,
-        TransactionType.ADJUSTMENT,
-        withdrawal.amount,
-        `Withdrawal payout failed; approval reversed (${withdrawal.reference})`,
-        { meta: { withdrawalId: withdrawal._id.toString(), reason: (err as Error).message } }
-      );
-      throw err;
+      // Record the failure for reconciliation; the admin manual path settles it.
+      withdrawal.payoutStatus = 'MANUAL_PENDING';
+      withdrawal.reviewNote = [note, `Automatic payout deferred: ${(err as Error).message}`]
+        .filter(Boolean)
+        .join(' — ');
     }
 
     withdrawal.status = WithdrawalStatus.APPROVED;
     withdrawal.reviewedBy = new Types.ObjectId(reviewerId.toString());
-    withdrawal.reviewNote = note;
+    withdrawal.reviewNote = withdrawal.reviewNote ?? note;
     withdrawal.reviewedAt = new Date();
     withdrawal.approvedAt = new Date();
     withdrawal.payoutEta = new Date(Date.now() + PAYOUT_WINDOW_HOURS * 60 * 60 * 1000);

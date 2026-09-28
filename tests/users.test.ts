@@ -76,9 +76,9 @@ describe('User profile & dashboard', () => {
     expect(s.totalDeposits).toBe(0);
     expect(s.totalWithdrawals).toBe(0);
     expect(s.referralEarnings).toBe(0);
-    // VIP defaults to R0 (Phase 4).
-    expect(s.vip.level).toBe('R0');
-    // Phase 5: an R0 user has two unlocked tasks available today and none completed.
+    // VIP defaults to Intern (tier 0).
+    expect(s.vip.level).toBe('INTERN');
+    // An Intern has two unlocked tasks available today and none completed.
     expect(s.tasks.available).toBe(2);
     expect(s.tasks.completed).toBe(0);
     expect(s.notifications.unread).toBe(0);

@@ -23,6 +23,7 @@ import {
 import { env } from '../config/env';
 import { validate, registerSchema, loginSchema } from '../validation/auth';
 import { authLimiter } from '../middleware/rateLimiter';
+import { luckyDrawService } from '../services/luckyDrawService';
 import { requireAuth } from '../middleware/auth';
 
 export const authRouter = Router();
@@ -144,6 +145,22 @@ authRouter.post(
       });
 
       await user.save();
+
+      // Qualifying referral → +1 Lucky Draw spin for the referrer.
+      // The entitlement is uniquely keyed by (referrer, referred user) so
+      // retries can never award the same referral twice, and it never blocks
+      // registration if the reward system is unavailable.
+      if (referredBy) {
+        try {
+          await luckyDrawService.awardSpinForReferral(
+            referredBy,
+            user._id,
+            'New direct referral registered'
+          );
+        } catch {
+          // Reward infrastructure must never fail a registration.
+        }
+      }
 
       const tokens = authTokensFor(user._id.toString(), user.role);
       setAuthCookies(res, tokens.access, tokens.refresh);

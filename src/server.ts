@@ -13,6 +13,8 @@ import { createApp } from './app';
 import { connectDB } from './config/database';
 import { env } from './config/env';
 import { ensureAdminAccount } from './services/adminBootstrap';
+import { bootstrapService } from './services/bootstrapService';
+import { schedulerService } from './services/schedulerService';
 
 async function bootstrap(): Promise<void> {
   await connectDB();
@@ -24,6 +26,17 @@ async function bootstrap(): Promise<void> {
     console.warn('[admin] Bootstrap skipped:', err instanceof Error ? err.message : err);
   }
 
+  // Seed levels, salary positions, system settings and Lucky Draw prizes.
+  // Idempotent: existing configuration and data are never overwritten.
+  try {
+    await bootstrapService.bootstrapAll();
+  } catch (err) {
+    console.warn('[bootstrap] Seed skipped:', err instanceof Error ? err.message : err);
+  }
+
+  // Server-side automation (month-end salary, weekly retention, event expiry).
+  const stopScheduler = schedulerService.start();
+
   const app = createApp();
   const server = app.listen(env.port, () => {
     console.log(`Royalbeads API listening on port ${env.port} (${env.nodeEnv})`);
@@ -32,6 +45,7 @@ async function bootstrap(): Promise<void> {
   // Graceful shutdown.
   const shutdown = (signal: string) => {
     console.log(`\n${signal} received – shutting down...`);
+    stopScheduler();
     server.close(() => {
       console.log('HTTP server closed.');
       process.exit(0);

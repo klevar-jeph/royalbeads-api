@@ -12,6 +12,10 @@ import { TaskCompletion, ITaskCompletion } from '../models/TaskCompletion';
 import { Notification, NotificationType } from '../models/Notification';
 import { TransactionType } from '../models/Transaction';
 import { walletService } from './walletService';
+import { taskScheduleService } from './taskScheduleService';
+import { teamCommissionService } from './teamCommissionService';
+import { levelService } from './levelService';
+
 import { TASK_SEEDS } from '../config/tasks';
 import { Types } from 'mongoose';
 
@@ -52,6 +56,11 @@ export const taskService = {
     if (!user) throw httpError(404, 'User not found.');
     const vipTier = user.vipLevel ?? 0;
 
+    const userLevel = await levelService.getByRank(vipTier);
+    const levelCode = userLevel ? userLevel.code : (vipTier === 0 ? 'INTERN' : `R${vipTier}`);
+    const dailyCapacity = userLevel ? userLevel.tasksPerDay : 4;
+    const schedule = await taskScheduleService.evaluateTaskAvailability(levelCode);
+
     const day = utcDay();
     const tasks = await Task.find({ active: true }).sort({ sortOrder: 1 });
     const completions = await TaskCompletion.find({ userId, day }).select('taskKey reward');
@@ -68,7 +77,11 @@ export const taskService = {
 
     const items = tasks.map((task: ITask) => {
       const entry = completionsByKey.get(task.key) ?? { count: 0, reward: 0 };
-      const locked = vipTier < task.minVipTier;
+      const matchesLevel =
+        (task.assignedLevels && task.assignedLevels.length > 0)
+          ? task.assignedLevels.includes(levelCode)
+          : vipTier >= task.minVipTier;
+      const locked = !matchesLevel || !schedule.enabled;
       return {
         id: task._id.toString(),
         key: task.key,
@@ -76,15 +89,19 @@ export const taskService = {
         description: task.description,
         reward: task.reward,
         minVipTier: task.minVipTier,
+        assignedLevels: task.assignedLevels,
         dailyLimit: task.dailyLimit,
         completedToday: entry.count,
         remainingToday: locked ? 0 : Math.max(task.dailyLimit - entry.count, 0),
         locked,
+        lockReason: !matchesLevel ? `Requires level ${task.minVipTier}` : schedule.reason,
       };
     });
 
     return {
       day,
+      schedule,
+      dailyCapacity,
       items,
       completedToday: completions.length,
       earnedToday,
@@ -107,16 +124,44 @@ export const taskService = {
     userId: string | Types.ObjectId,
     taskId: string
   ): Promise<{ completion: ITaskCompletion; reward: number }> {
-    const user = await User.findById(userId).select('vipLevel');
+    const user = await User.findById(userId).select('vipLevel status');
     if (!user) throw httpError(404, 'User not found.');
+    if (user.status !== 'ACTIVE') throw httpError(403, 'Account is not active.');
+
+    const vipTier = user.vipLevel ?? 0;
+    const userLevel = await levelService.getByRank(vipTier);
+    const levelCode = userLevel ? userLevel.code : (vipTier === 0 ? 'INTERN' : `R${vipTier}`);
+
+    const schedule = await taskScheduleService.evaluateTaskAvailability(levelCode);
+    if (!schedule.enabled) {
+      throw httpError(403, schedule.reason || 'Tasks are currently unavailable.');
+    }
 
     const task = await Task.findById(taskId);
     if (!task || !task.active) throw httpError(404, 'Task not found.');
-    if ((user.vipLevel ?? 0) < task.minVipTier) {
-      throw httpError(403, `This task requires VIP level R${task.minVipTier}.`);
+
+    const matchesLevel =
+      (task.assignedLevels && task.assignedLevels.length > 0)
+        ? task.assignedLevels.includes(levelCode)
+        : vipTier >= task.minVipTier;
+
+    if (!matchesLevel) {
+      // Preserve the historical message contract for tier-gated tasks.
+      if (!task.assignedLevels || task.assignedLevels.length === 0) {
+        throw httpError(403, `This task requires VIP level R${task.minVipTier}.`);
+      }
+      throw httpError(403, `This task is not available for level ${levelCode}.`);
     }
 
     const day = utcDay();
+
+    if (userLevel && userLevel.tasksPerDay) {
+      const totalDoneToday = await TaskCompletion.countDocuments({ userId, day });
+      if (totalDoneToday >= userLevel.tasksPerDay) {
+        throw httpError(409, `You have reached your daily limit of ${userLevel.tasksPerDay} tasks for ${levelCode}.`);
+      }
+    }
+
     const doneToday = await TaskCompletion.countDocuments({ userId, taskKey: task.key, day });
     if (doneToday >= task.dailyLimit) {
       throw httpError(409, 'You have already completed this task for today.');
@@ -124,7 +169,6 @@ export const taskService = {
 
     const idempotencyKey = `${userId}-${task.key}-${day}-${doneToday + 1}`;
 
-    // The unique index is the final guard against double claims.
     let completion: ITaskCompletion;
     try {
       completion = await TaskCompletion.create({
@@ -146,8 +190,15 @@ export const taskService = {
         `Task reward: ${task.title}`,
         { idempotencyKey, meta: { taskId: task._id.toString(), taskKey: task.key, day } }
       );
+
+      // Distribute team commission (A: 5%, B: 2%, C: 1%)
+      await teamCommissionService.distributeTaskCommissions(
+        userId,
+        task.reward,
+        completion._id.toString(),
+        task.title
+      );
     } catch (err) {
-      // Roll back the completion if crediting failed so the attempt isn't lost.
       await TaskCompletion.deleteOne({ _id: completion._id });
       throw err;
     }
@@ -157,7 +208,7 @@ export const taskService = {
       type: NotificationType.TASK,
       title: 'Task reward credited',
       message: `You earned ₦${task.reward.toLocaleString()} for completing "${task.title}".`,
-    });
+    }).catch(() => {});
 
     return { completion, reward: task.reward };
   },

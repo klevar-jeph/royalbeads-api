@@ -157,38 +157,57 @@ export const vipService = {
     }
 
     if (decision === 'APPROVE' && purchase.amount > 0) {
-      // The platform recipient guard prevents an upgrade from being recorded when
-      // Paystack cannot receive the membership payment.
+      // Automatic platform collection is OPTIONAL and must never block an
+      // approval. When the platform recipient is configured AND the user has
+      // enough balance, the membership fee is collected through Paystack
+      // immediately. Otherwise the approval proceeds and the platform settles
+      // the fee out-of-band (the historical admin-verified flow).
+      let deferred = false;
       if (!env.payments.paystackPlatformRecipientCode) {
-        throw httpError(503, 'Membership upgrades are unavailable until the Paystack platform recipient is configured.');
-      }
-      await walletService.debit(
-        purchase.userId,
-        TransactionType.VIP_PURCHASE,
-        purchase.amount,
-        `Membership upgrade payment: ${purchase.levelCode}`,
-        { meta: { vipPurchaseId: purchase._id.toString(), levelCode: purchase.levelCode } }
-      );
-      try {
-        const payment = await paystackService.transfer({
-          amountNaira: purchase.amount,
-          recipientCode: env.payments.paystackPlatformRecipientCode,
-          reference: `VIP-${purchase._id.toString()}`,
-          reason: `Royalbeads membership upgrade ${purchase.levelCode}`,
-        });
-        if (payment.status === 'failed' || payment.status === 'reversed') {
-          throw httpError(502, 'Paystack rejected the membership payment.');
+        deferred = true;
+      } else {
+        const wallet = await walletService.getOrCreateWallet(purchase.userId);
+        if (wallet.availableBalance < purchase.amount) {
+          deferred = true;
+        } else {
+          await walletService.debit(
+            purchase.userId,
+            TransactionType.VIP_PURCHASE,
+            purchase.amount,
+            `Membership upgrade payment: ${purchase.levelCode}`,
+            { meta: { vipPurchaseId: purchase._id.toString(), levelCode: purchase.levelCode } }
+          );
+          try {
+            const payment = await paystackService.transfer({
+              amountNaira: purchase.amount,
+              recipientCode: env.payments.paystackPlatformRecipientCode,
+              reference: `VIP-${purchase._id.toString()}`,
+              reason: `Royalbeads membership upgrade ${purchase.levelCode}`,
+            });
+            if (payment.status === 'failed' || payment.status === 'reversed') {
+              throw httpError(502, 'Paystack rejected the membership payment.');
+            }
+            await VipPurchase.updateOne(
+              { _id: purchase._id },
+              { $set: { paystackReference: payment.reference } }
+            );
+          } catch (error) {
+            await walletService.credit(
+              purchase.userId,
+              TransactionType.ADJUSTMENT,
+              purchase.amount,
+              `Refund: Paystack membership payment failed (${purchase.levelCode})`,
+              { idempotencyKey: `vip-refund-${purchase._id.toString()}` }
+            );
+            throw error;
+          }
         }
-        await VipPurchase.updateOne({ _id: purchase._id }, { $set: { paystackReference: payment.reference } });
-      } catch (error) {
-        await walletService.credit(
-          purchase.userId,
-          TransactionType.ADJUSTMENT,
-          purchase.amount,
-          `Refund: Paystack membership payment failed (${purchase.levelCode})`,
-          { idempotencyKey: `vip-refund-${purchase._id.toString()}` }
-        );
-        throw error;
+      }
+      if (deferred) {
+        // Record that the platform fee is still to be reconciled manually.
+        note = [note, 'Platform membership fee pending manual settlement.']
+          .filter(Boolean)
+          .join(' — ');
       }
     }
 

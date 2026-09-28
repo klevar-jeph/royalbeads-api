@@ -21,6 +21,14 @@ import walletRouter from './routes/wallet';
 import adminRouter from './routes/admin';
 import paymentsRouter from './routes/payments';
 import referralRouter from './routes/referrals';
+import levelRouter from './routes/levels';
+import teamRouter from './routes/team';
+import salaryRouter from './routes/salary';
+import rewardsRouter from './routes/rewards';
+import settingsRouter from './routes/settings';
+import adminPlatformRouter from './routes/adminPlatform';
+import adminSalaryRouter from './routes/adminSalary';
+import adminRewardsRouter from './routes/adminRewards';
 
 export function createApp(): Express {
   const app = express();
@@ -87,6 +95,17 @@ export function createApp(): Express {
   app.use('/api/wallet', walletRouter);
   app.use('/api/payments', paymentsRouter);
   app.use('/api/referrals', referralRouter);
+  // New platform domains (levels, team, salary, rewards, settings).
+  app.use('/api/levels', levelRouter);
+  app.use('/api/team', teamRouter);
+  app.use('/api/salary', salaryRouter);
+  app.use('/api/rewards', rewardsRouter);
+  app.use('/api/settings', settingsRouter);
+  // Admin extensions are mounted before the legacy admin router so the
+  // dedicated sub-paths resolve first; both require ADMIN/SUPER_ADMIN.
+  app.use('/api/admin', adminPlatformRouter);
+  app.use('/api/admin', adminSalaryRouter);
+  app.use('/api/admin', adminRewardsRouter);
   app.use('/api/admin', adminRouter);
 
   // --- 404 + error handler ----------------------------------------------
