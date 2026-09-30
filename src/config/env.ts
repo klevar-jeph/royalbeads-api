@@ -103,8 +103,6 @@ export const env = {
     paystackPlatformRecipientCode: optional('PAYSTACK_PLATFORM_RECIPIENT_CODE', ''),
   },
 
-  /** Referral commission percentage credited on a downline's first deposit (Phase 7). */
-  referralCommissionPercent: int('REFERRAL_COMMISSION_PERCENT', 5),
   /** Minimum withdrawal amount (whole Naira). */
   minWithdrawal: int('MIN_WITHDRAWAL', 5000),
 

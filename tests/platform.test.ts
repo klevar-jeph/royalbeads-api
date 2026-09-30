@@ -164,6 +164,101 @@ describe('Task schedule engine', () => {
   });
 });
 
+describe('Intern 3-day allowance', () => {
+  const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m, d, 12, 0, 0));
+  const dayStr = (offsetDays: number) =>
+    new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  function seedDays(userId: string, days: string[]) {
+    return TaskCompletion.create(
+      days.map((day, i) => ({
+        userId,
+        taskKey: `seed-${i}`,
+        taskTitle: 'Seeded completion',
+        day,
+        reward: 100,
+      }))
+    );
+  }
+
+  it('allows Sundays for interns even when Sunday is off for everyone else', async () => {
+    const settings = await systemSettingService.getSettings();
+    settings.taskInternWeekendEnabled = false;
+    settings.taskSundayEnabled = false;
+    await settings.save();
+
+    const sunday = utc(2026, 8, 27); // 2026-09-27 is a Sunday.
+    const intern = await taskScheduleService.evaluateTaskAvailability('INTERN', sunday);
+    expect(intern.enabled).toBe(true);
+
+    const r1 = await taskScheduleService.evaluateTaskAvailability('R1', sunday);
+    expect(r1.enabled).toBe(false);
+    expect(r1.reason).toMatch(/weekend schedule/i);
+  });
+
+  it('blocks a new day after 3 lifetime working days but keeps the current day open', async () => {
+    await systemSettingService.getSettings();
+    const internId = new Types.ObjectId();
+    await seedDays(internId.toString(), ['2026-09-21', '2026-09-22', '2026-09-23']);
+
+    // A fresh day (Thursday) is refused once the allowance is spent.
+    const freshDay = await taskScheduleService.evaluateTaskAvailability(
+      'INTERN',
+      utc(2026, 8, 24),
+      internId
+    );
+    expect(freshDay.enabled).toBe(false);
+    expect(freshDay.status).toBe('DISABLED');
+    expect(freshDay.reason).toMatch(/3 Intern working days/);
+
+    // A day already worked stays usable so the intern can finish it out.
+    const sameDay = await taskScheduleService.evaluateTaskAvailability(
+      'INTERN',
+      utc(2026, 8, 22),
+      internId
+    );
+    expect(sameDay.enabled).toBe(true);
+
+    // The allowance is intern-only — an R1 user with identical history is fine.
+    const r1 = await taskScheduleService.evaluateTaskAvailability(
+      'R1',
+      utc(2026, 8, 24),
+      internId
+    );
+    expect(r1.enabled).toBe(true);
+  });
+
+  it('refuses task completion with 403 once the allowance is spent', async () => {
+    const app = freshApp();
+    await bootstrapService.bootstrapAll();
+    await taskService.syncDefinitions();
+
+    const { agent, userId } = await register(app, 'intern-quota@royalbeads.test');
+    // Three previously worked days — today is not among them.
+    await seedDays(userId, [dayStr(-10), dayStr(-9), dayStr(-8)]);
+
+    const task = await Task.findOne({ active: true });
+    const res = await agent.post(`/api/tasks/${task!._id}/complete`).expect(403);
+    expect(res.body.message).toMatch(/upgrade/i);
+    expect(await TaskCompletion.countDocuments({ userId })).toBe(3);
+  });
+
+  it('keeps completing tasks on a day already counted in the allowance', async () => {
+    const app = freshApp();
+    await bootstrapService.bootstrapAll();
+    await taskService.syncDefinitions();
+
+    const { agent, userId } = await register(app, 'intern-sameday@royalbeads.test');
+    // Three days including today: the quota is spent, but today stays open.
+    await seedDays(userId, [dayStr(-10), dayStr(-9), dayStr(0)]);
+
+    const task = await Task.findOne({ active: true });
+    const res = await agent.post(`/api/tasks/${task!._id}/complete`).expect(201);
+    expect(res.body.reward).toBeGreaterThan(0);
+    expect(await TaskCompletion.countDocuments({ userId })).toBe(4);
+  });
+});
+
 describe('Task completion & team commissions', () => {
   it('credits 5%/2%/1% to A/B/C uplines and retries without duplicates', async () => {
     const app = freshApp();

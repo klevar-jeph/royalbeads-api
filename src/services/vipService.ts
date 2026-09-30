@@ -16,6 +16,7 @@ import { TransactionType } from '../models/Transaction';
 import { walletService } from './walletService';
 import { env } from '../config/env';
 import { paystackService } from './paystackService';
+import { referralService } from './referralService';
 
 function toLevelDTO(level: VipLevelConfig): VipLevelDTO {
   return {
@@ -229,6 +230,14 @@ export const vipService = {
         title: 'VIP level activated',
         message: `Congratulations! Your ${purchase.levelCode} (${purchase.levelName}) membership is now active.`,
       });
+
+      // Referral programme: 12% / 5% / 3% to the A / B / C uplines for this
+      // buyer's FIRST successful upgrade — never blocks the approval itself.
+      try {
+        await referralService.creditFirstUpgradeCommission(purchase);
+      } catch (error) {
+        console.error('[vipService] referral upgrade commission failed:', error);
+      }
     } else {
       await Notification.create({
         userId: purchase.userId,

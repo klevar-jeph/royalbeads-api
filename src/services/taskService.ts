@@ -59,7 +59,7 @@ export const taskService = {
     const userLevel = await levelService.getByRank(vipTier);
     const levelCode = userLevel ? userLevel.code : (vipTier === 0 ? 'INTERN' : `R${vipTier}`);
     const dailyCapacity = userLevel ? userLevel.tasksPerDay : 4;
-    const schedule = await taskScheduleService.evaluateTaskAvailability(levelCode);
+    const schedule = await taskScheduleService.evaluateTaskAvailability(levelCode, new Date(), userId);
 
     const day = utcDay();
     const tasks = await Task.find({ active: true }).sort({ sortOrder: 1 });
@@ -132,7 +132,7 @@ export const taskService = {
     const userLevel = await levelService.getByRank(vipTier);
     const levelCode = userLevel ? userLevel.code : (vipTier === 0 ? 'INTERN' : `R${vipTier}`);
 
-    const schedule = await taskScheduleService.evaluateTaskAvailability(levelCode);
+    const schedule = await taskScheduleService.evaluateTaskAvailability(levelCode, new Date(), userId);
     if (!schedule.enabled) {
       throw httpError(403, schedule.reason || 'Tasks are currently unavailable.');
     }

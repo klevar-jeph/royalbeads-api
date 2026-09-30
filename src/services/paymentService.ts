@@ -14,7 +14,6 @@ import { Deposit, DepositStatus, IDeposit } from '../models/Deposit';
 import { Withdrawal, WithdrawalStatus, IWithdrawal } from '../models/Withdrawal';
 import { TransactionType } from '../models/Transaction';
 import { walletService } from './walletService';
-import { referralService } from './referralService';
 import { Notification, NotificationType } from '../models/Notification';
 import { sendEmail } from './email';
 import { env } from '../config/env';
@@ -139,14 +138,6 @@ export const paymentService = {
         `Deposit confirmed (${deposit.reference})`,
         { idempotencyKey: `deposit:${deposit._id}`, meta: { depositId: deposit._id.toString() } }
       );
-
-      // Referral programme: credit the referrer (idempotent per deposit).
-      try {
-        await referralService.creditReferralCommission(deposit.userId, deposit._id, deposit.amount);
-      } catch (err) {
-        // A referral failure must never block the user's deposit confirmation.
-        console.error('[paymentService] referral commission failed:', err);
-      }
     }
 
     await Notification.create({

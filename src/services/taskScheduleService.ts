@@ -4,10 +4,13 @@
 // 1. Explicit date override
 // 2. Audit / holiday rule
 // 3. Level-specific schedule
-// 4. Weekly schedule (Mon-Fri enabled, Sat/Sun configurable)
-// 5. Global task availability
+// 4. Intern one-time working-day allowance (3 days total, any weekday/Sunday)
+// 5. Weekly schedule (Mon-Fri enabled, Sat/Sun configurable)
+// 6. Global task availability
 
+import { Types } from 'mongoose';
 import { TaskScheduleOverride } from '../models/TaskScheduleOverride';
+import { TaskCompletion } from '../models/TaskCompletion';
 import { systemSettingService } from './systemSettingService';
 import { LevelConfig } from '../models/LevelConfig';
 import { levelService } from './levelService';
@@ -19,10 +22,21 @@ export interface TaskAvailabilityResult {
   reason?: string;
 }
 
+/** Interns may work this many distinct days in total before upgrading. */
+export const INTERN_TOTAL_WORKING_DAYS = 3;
+
 export const taskScheduleService = {
+  /**
+   * Whether `userLevelCode` may complete tasks on `date`.
+   *
+   * `userId` powers the Intern one-time allowance (3 distinct working days);
+   * every real call site passes it. Without a `userId` only the day/week rules
+   * are evaluated (used by level-agnostic tests).
+   */
   async evaluateTaskAvailability(
     userLevelCode: string,
-    date = new Date()
+    date = new Date(),
+    userId?: string | Types.ObjectId
   ): Promise<TaskAvailabilityResult> {
     const dayOfWeek = date.getUTCDay(); // 0 = Sun, 1 = Mon ... 6 = Sat
     const dateStr = date.toISOString().slice(0, 10); // YYYY-MM-DD
@@ -67,9 +81,32 @@ export const taskScheduleService = {
 
     // 4. Weekly schedule check
     const settings = await systemSettingService.getSettings();
+    const isIntern = userLevelCode.toUpperCase() === 'INTERN';
 
-    // Intern weekend schedule
-    if (userLevelCode.toUpperCase() === 'INTERN' && settings.taskInternWeekendEnabled) {
+    // Intern one-time allowance: 3 distinct working days in total (lifetime),
+    // counted from days the intern actually completed at least one task.
+    if (isIntern && userId) {
+      const workedDays = await TaskCompletion.distinct<string>('day', { userId });
+      if (
+        workedDays.length >= INTERN_TOTAL_WORKING_DAYS &&
+        !workedDays.includes(dateStr)
+      ) {
+        return {
+          enabled: false,
+          status: 'DISABLED',
+          reason: `You have used all ${INTERN_TOTAL_WORKING_DAYS} Intern working days — upgrade your membership to continue tasks.`,
+        };
+      }
+    }
+
+    // Intern weekend schedule (enabled on every day of the week).
+    if (isIntern && settings.taskInternWeekendEnabled) {
+      return { enabled: true, status: 'ENABLED' };
+    }
+
+    // Interns always work Sundays while their allowance lasts — even when the
+    // global Sunday schedule is off.
+    if (isIntern && dayOfWeek === 0) {
       return { enabled: true, status: 'ENABLED' };
     }
 

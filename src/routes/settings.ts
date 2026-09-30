@@ -60,7 +60,11 @@ settingsRouter.get(
       const user = await User.findById(req.user!.id).select('vipLevel');
       const level = await levelService.getByRank(user?.vipLevel ?? 0);
       const code = level ? level.code : 'INTERN';
-      const availability = await taskScheduleService.evaluateTaskAvailability(code);
+      const availability = await taskScheduleService.evaluateTaskAvailability(
+        code,
+        new Date(),
+        req.user!.id
+      );
       res.json({ levelCode: code, ...availability });
     } catch (err) {
       next(err);

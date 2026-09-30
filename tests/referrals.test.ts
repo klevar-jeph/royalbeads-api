@@ -1,10 +1,11 @@
 // tests/referrals.test.ts
-// Referral commission + admin API tests.
+// Referral commission (paid once on a downline's first approved VIP upgrade)
+// + admin API tests.
 
 import request from 'supertest';
 import crypto from 'crypto';
 import type { Express } from 'express';
-import { freshApp, authenticatedAgent, TEST_USER } from './helpers';
+import { freshApp, authenticatedAgent, TEST_USER, Agent } from './helpers';
 import { User, UserRole, AccountStatus } from '../src/models/User';
 import { Wallet } from '../src/models/Wallet';
 import { Transaction, TransactionType } from '../src/models/Transaction';
@@ -17,7 +18,7 @@ const ADMIN = {
   password: TEST_USER.password,
 };
 
-async function adminAgent(app: Express) {
+async function adminAgent(app: Express): Promise<Agent> {
   await User.create({
     fullName: ADMIN.fullName,
     email: ADMIN.email,
@@ -25,14 +26,14 @@ async function adminAgent(app: Express) {
     role: UserRole.SUPER_ADMIN,
     status: AccountStatus.ACTIVE,
   });
-  const agent = request.agent(app);
+  const agent = request.agent(app) as unknown as Agent;
   await agent.post('/api/auth/login').send({ email: ADMIN.email, password: ADMIN.password }).expect(200);
   return agent;
 }
 
 /** Register + activate a user who was referred by `referralCode`. */
-async function referredAgent(app: Express, email: string, referralCode: string) {
-  const agent = request.agent(app) as unknown as ReturnType<typeof request.agent>;
+async function referredAgent(app: Express, email: string, referralCode: string): Promise<Agent> {
+  const agent = request.agent(app) as unknown as Agent;
   await agent
     .post('/api/auth/register')
     .send({ fullName: 'Downline User', email, password: TEST_USER.password, referralCode })
@@ -40,6 +41,21 @@ async function referredAgent(app: Express, email: string, referralCode: string) 
   await User.updateOne({ email }, { $set: { status: AccountStatus.ACTIVE } });
   await agent.post('/api/auth/login').send({ email, password: TEST_USER.password }).expect(200);
   return agent;
+}
+
+/** Create a VIP upgrade as `user` and have the admin approve it. */
+async function purchaseAndApprove(agent: Agent, admin: Agent, levelCode = 'R1') {
+  const created = await agent.post('/api/vip/purchase').send({ levelCode }).expect(201);
+  await admin
+    .post(`/api/admin/vip/purchases/${created.body.purchase.id}/review`)
+    .send({ decision: 'APPROVE' })
+    .expect(200);
+  return created.body.purchase;
+}
+
+async function commissionTotal(userId: string): Promise<number> {
+  const txs = await Transaction.find({ userId, type: TransactionType.REFERRAL_COMMISSION });
+  return txs.reduce((sum, tx) => sum + tx.amount, 0);
 }
 
 // Deposit creation always goes through the Paystack gateway now — spy on
@@ -92,7 +108,7 @@ async function confirmDepositViaWebhook(
 }
 
 describe('Referrals', () => {
-  it('returns the referral summary with code, link, rate and downlines', async () => {
+  it('returns the referral summary with code, link, rates and downlines', async () => {
     const app = freshApp();
     const { agent, user } = await authenticatedAgent(app);
     await referredAgent(app, 'downline1@royalbeads.test', user.referralCode);
@@ -100,57 +116,102 @@ describe('Referrals', () => {
     const res = await agent.get('/api/referrals').expect(200);
     expect(res.body.referrals.referralCode).toBe(user.referralCode);
     expect(res.body.referrals.shareLink).toMatch(/ref=/);
-    expect(res.body.referrals.commissionPercent).toBeGreaterThan(0);
+    expect(res.body.referrals.commissionRates).toEqual({ a: 12, b: 5, c: 3 });
     expect(res.body.referrals.total).toBe(1);
     expect(res.body.referrals.downlines[0].email).toBe('downline1@royalbeads.test');
   });
 
-  it('credits the referrer when a downline deposit confirms, exactly once', async () => {
+  it('does not credit the referrer when a downline deposit confirms', async () => {
     const app = freshApp();
-    const { agent: referrer, user: referrerUser } = await authenticatedAgent(app);
+    const { user: referrerUser } = await authenticatedAgent(app);
     const downline = await referredAgent(app, 'downline2@royalbeads.test', referrerUser.referralCode);
 
     const deposit = await downline.post('/api/wallet/deposits').send({ amount: 10_000 }).expect(201);
     // Money enters ONLY via the Paystack webhook (no admin approval step).
     await confirmDepositViaWebhook(app, deposit.body.deposit.reference, 10_000);
 
-    // 5% of 10,000 = 500 credited to the referrer.
+    // Deposits no longer earn referral commission.
     const wallet = await Wallet.findOne({ userId: referrerUser.id });
-    expect(wallet?.availableBalance).toBe(500);
+    expect(wallet?.availableBalance ?? 0).toBe(0);
+    expect(await commissionTotal(referrerUser.id)).toBe(0);
+  });
+
+  it('credits the A-level referrer 12% once, on the first approved upgrade only', async () => {
+    const app = freshApp();
+    const { agent: referrer, user: referrerUser } = await authenticatedAgent(app);
+    const downline = await referredAgent(app, 'downline3@royalbeads.test', referrerUser.referralCode);
+    const admin = await adminAgent(app);
+
+    // First upgrade: R1 = ₦15,000 → 12% = ₦1,800 to the direct referrer.
+    await purchaseAndApprove(downline, admin, 'R1');
+
+    const wallet = await Wallet.findOne({ userId: referrerUser.id });
+    expect(wallet?.availableBalance).toBe(1_800);
+    expect(await commissionTotal(referrerUser.id)).toBe(1_800);
 
     const commissions = await Transaction.find({
       userId: referrerUser.id,
       type: TransactionType.REFERRAL_COMMISSION,
     });
     expect(commissions).toHaveLength(1);
-    expect(commissions[0].amount).toBe(500);
-
-    // A second deposit credits another commission (per-deposit idempotency).
-    const second = await downline.post('/api/wallet/deposits').send({ amount: 4_000 }).expect(201);
-    await confirmDepositViaWebhook(app, second.body.deposit.reference, 4_000);
-    const wallet2 = await Wallet.findOne({ userId: referrerUser.id });
-    expect(wallet2?.availableBalance).toBe(700); // +200 (5% of 4,000)
-
-    const summary = await referrer.get('/api/referrals').expect(200);
-    expect(summary.body.referrals.earnings).toBe(700);
-
-    const dash = await referrer.get('/api/users/me/dashboard').expect(200);
-    expect(dash.body.summary.referralEarnings).toBe(700);
+    expect(commissions[0].amount).toBe(1_800);
 
     const notes = await Notification.find({ userId: referrerUser.id, type: 'REFERRAL' });
-    expect(notes.length).toBeGreaterThan(0);
+    expect(notes).toHaveLength(1);
+
+    // Second upgrade (R2 = ₦30,000) earns the referrer nothing — one-time rule.
+    await purchaseAndApprove(downline, admin, 'R2');
+    expect(await commissionTotal(referrerUser.id)).toBe(1_800);
+    expect(await Wallet.findOne({ userId: referrerUser.id })).toHaveProperty(
+      'availableBalance',
+      1_800
+    );
+    expect(await Notification.countDocuments({ userId: referrerUser.id, type: 'REFERRAL' })).toBe(1);
+
+    const summary = await referrer.get('/api/referrals').expect(200);
+    expect(summary.body.referrals.earnings).toBe(1_800);
+
+    const dash = await referrer.get('/api/users/me/dashboard').expect(200);
+    expect(dash.body.summary.referralEarnings).toBe(1_800);
+  });
+
+  it('splits 12% / 5% / 3% across the A, B and C uplines of the chain', async () => {
+    const app = freshApp();
+    const { user: uplineC } = await authenticatedAgent(app);
+    const uplineB = await referredAgent(
+      app,
+      'upline-b@royalbeads.test',
+      uplineC.referralCode
+    );
+    const codeB = (await User.findOne({ email: 'upline-b@royalbeads.test' }))!.referralCode;
+    const uplineA = await referredAgent(app, 'upline-a@royalbeads.test', codeB);
+    const codeA = (await User.findOne({ email: 'upline-a@royalbeads.test' }))!.referralCode;
+    const buyer = await referredAgent(app, 'buyer@royalbeads.test', codeA);
+    const admin = await adminAgent(app);
+
+    // Buyer's first upgrade (R1 = ₦15,000):
+    //   A (upline-a, direct referrer) = 12% → ₦1,800
+    //   B (upline-b)                   =  5% → ₦750
+    //   C (uplineC / root)             =  3% → ₦450
+    await purchaseAndApprove(buyer, admin, 'R1');
+
+    const idA = (await User.findOne({ email: 'upline-a@royalbeads.test' }))!.id;
+    const idB = (await User.findOne({ email: 'upline-b@royalbeads.test' }))!.id;
+    expect(await commissionTotal(idA)).toBe(1_800);
+    expect(await commissionTotal(idB)).toBe(750);
+    expect(await commissionTotal(uplineC.id)).toBe(450);
   });
 
   it('does not credit referrals for users without a referrer', async () => {
     const app = freshApp();
     const { user } = await authenticatedAgent(app);
-
     const solo = await authenticatedAgent(app, { email: 'solo@royalbeads.test' });
-    const deposit = await solo.agent.post('/api/wallet/deposits').send({ amount: 5000 }).expect(201);
-    await confirmDepositViaWebhook(app, deposit.body.deposit.reference, 5000);
+    const admin = await adminAgent(app);
 
-    const wallet = await Wallet.findOne({ userId: user.id });
-    expect(wallet?.availableBalance ?? 0).toBe(0);
+    await purchaseAndApprove(solo.agent, admin, 'R1');
+
+    expect(await commissionTotal(user.id)).toBe(0);
+    expect(await Transaction.countDocuments({ type: TransactionType.REFERRAL_COMMISSION })).toBe(0);
   });
 
   it('requires authentication', async () => {
