@@ -9,7 +9,7 @@ import { DashboardSummaryDTO } from '../types/dto';
 import { getLevelByTier, VIP_LEVELS } from '../config/vipLevels';
 import { walletService } from './walletService';
 import { taskService } from './taskService';
-import { TransactionType } from '../models/Transaction';
+import { TransactionType, EARNING_TRANSACTION_TYPES } from '../models/Transaction';
 import { Types } from 'mongoose';
 
 export const dashboardService = {
@@ -23,10 +23,12 @@ export const dashboardService = {
     const vipLevel = getLevelByTier(user.vipLevel ?? 0) ?? VIP_LEVELS[0];
 
     // --- Wallet + tasks (Phase 5): real balances and today's tasks ---------
-    const [wallet, referralEarnings, taskList] = await Promise.all([
+    const [wallet, referralEarnings, taskList, totalEarningBalance] = await Promise.all([
       walletService.getOrCreateWallet(userId),
       walletService.sumByType(userId, TransactionType.REFERRAL_COMMISSION),
       taskService.listForUser(userId),
+      // Mine → Total Earning Balance: earnings only (deposits excluded).
+      walletService.sumByTypes(userId, EARNING_TRANSACTION_TYPES),
     ]);
 
     return {
@@ -42,6 +44,7 @@ export const dashboardService = {
       // --- Wallet: real balances (Phase 5) ---------------------------------
       availableBalance: wallet.availableBalance,
       totalEarnings: wallet.totalEarned,
+      totalEarningBalance,
       // Deposits/withdrawals arrive with the payments phase (Phase 6).
       totalDeposits: 0,
       totalWithdrawals: 0,

@@ -72,4 +72,28 @@ export const userController = {
       next(err);
     }
   },
+
+  /**
+   * POST /api/users/me/security-password
+   * Set (first time) or change the secondary security password. The login
+   * password always proves ownership; the new value is hashed by the model's
+   * pre('save') hook.
+   */
+  async setSecurityPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { currentPassword, securityPassword } = req.body;
+      const user = await User.findById(req.user!.id);
+      if (!user) throw httpError(404, 'User not found.');
+
+      const match = await user.comparePassword(currentPassword);
+      if (!match) throw httpError(401, 'Current password is incorrect.');
+
+      user.securityPasswordHash = securityPassword;
+      await user.save();
+
+      res.json({ message: 'Security password updated.' });
+    } catch (err) {
+      next(err);
+    }
+  },
 };

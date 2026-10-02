@@ -1,13 +1,16 @@
 // src/services/adminBootstrap.ts
-// Ensures the platform administrator account exists and matches the
+// Ensures the platform SUPER ADMIN account exists and matches the
 // ADMIN_USERNAME / ADMIN_PASSWORD environment variables.
 //
 // Runs once at server startup (after the DB connection is open):
 //   - ADMIN_USERNAME unset  → no-op (bootstrap disabled).
-//   - account missing       → created with role ADMIN and the env password.
-//   - account exists        → promoted to ADMIN (if a regular user) and the
-//     password is re-synced whenever it no longer matches ADMIN_PASSWORD, so
+//   - account missing       → created with role SUPER_ADMIN and the env password.
+//   - account exists        → promoted to SUPER_ADMIN (unless it already is) and
+//     the password is re-synced whenever it no longer matches ADMIN_PASSWORD, so
 //     rotating the admin password is a pure .env change + restart.
+//
+// The super admin can grant and revoke admin access for any other user from the
+// admin console (Users → Profile & controls → Role).
 
 import { User, UserRole, AccountStatus } from '../models/User';
 import { env } from '../config/env';
@@ -32,18 +35,18 @@ export async function ensureAdminAccount(): Promise<void> {
       email,
       phone: '',
       passwordHash: password, // hashed by the pre('save') hook
-      role: UserRole.ADMIN,
+      role: UserRole.SUPER_ADMIN,
       status: AccountStatus.ACTIVE,
     });
-    console.log(`[admin] Admin account created for ${email} (sign in at /login).`);
+    console.log(`[admin] Super admin account created for ${email} (sign in at /login).`);
     return;
   }
 
-  // Account exists: make sure it is an administrator and that the password
+  // Account exists: make sure it is the SUPER ADMIN and that the password
   // matches the environment (env is the source of truth for admin access).
   let dirty = false;
-  if (existing.role !== UserRole.ADMIN && existing.role !== UserRole.SUPER_ADMIN) {
-    existing.role = UserRole.ADMIN;
+  if (existing.role !== UserRole.SUPER_ADMIN) {
+    existing.role = UserRole.SUPER_ADMIN;
     dirty = true;
   }
   if (existing.status !== AccountStatus.ACTIVE) {
@@ -56,6 +59,6 @@ export async function ensureAdminAccount(): Promise<void> {
   }
   if (dirty) {
     await existing.save();
-    console.log(`[admin] Admin account for ${email} was synced with ADMIN_* env credentials.`);
+    console.log(`[admin] Super admin account for ${email} was synced with ADMIN_* env credentials.`);
   }
 }

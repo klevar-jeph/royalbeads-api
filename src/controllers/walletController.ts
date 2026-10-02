@@ -107,6 +107,16 @@ export const walletController = {
     }
   },
 
+  /** GET /api/wallet/earnings — earnings-by-source (Mine → Earnings). */
+  async getEarnings(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const earnings = await walletService.earningsBreakdown(req.user!.id);
+      res.json({ earnings });
+    } catch (err) {
+      next(err);
+    }
+  },
+
   /** GET /api/wallet/instructions — public payment instructions. */
   async getInstructions(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

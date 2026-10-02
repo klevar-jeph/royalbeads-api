@@ -15,7 +15,7 @@ describe('Tasks & rewards', () => {
     const res = await agent.get('/api/tasks').expect(200);
     expect(res.body.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(res.body.items).toHaveLength(4);
-    // VIP-gated tasks are locked for an R0 user.
+    // VIP-gated tasks are locked for an Intern (tier 0) user.
     const locked = res.body.items.filter((t: any) => t.locked);
     expect(locked.length).toBe(2); // survey (R1) + social-share (R2)
     expect(res.body.completedToday).toBe(0);

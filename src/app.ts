@@ -26,9 +26,11 @@ import teamRouter from './routes/team';
 import salaryRouter from './routes/salary';
 import rewardsRouter from './routes/rewards';
 import settingsRouter from './routes/settings';
+import fundsRouter from './routes/funds';
 import adminPlatformRouter from './routes/adminPlatform';
 import adminSalaryRouter from './routes/adminSalary';
 import adminRewardsRouter from './routes/adminRewards';
+import adminFundsRouter from './routes/adminFunds';
 
 export function createApp(): Express {
   const app = express();
@@ -101,11 +103,13 @@ export function createApp(): Express {
   app.use('/api/salary', salaryRouter);
   app.use('/api/rewards', rewardsRouter);
   app.use('/api/settings', settingsRouter);
+  app.use('/api/funds', fundsRouter);
   // Admin extensions are mounted before the legacy admin router so the
   // dedicated sub-paths resolve first; both require ADMIN/SUPER_ADMIN.
   app.use('/api/admin', adminPlatformRouter);
   app.use('/api/admin', adminSalaryRouter);
   app.use('/api/admin', adminRewardsRouter);
+  app.use('/api/admin', adminFundsRouter);
   app.use('/api/admin', adminRouter);
 
   // --- 404 + error handler ----------------------------------------------

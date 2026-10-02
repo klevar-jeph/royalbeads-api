@@ -3,6 +3,10 @@
 
 import { Schema, model, Document, Types } from 'mongoose';
 import { hashPassword, verifyPassword } from '../utils/password';
+import { VIP_LEVELS } from '../config/vipLevels';
+
+/** Highest configured membership tier (tier 0 is Intern). */
+const MAX_VIP_TIER = VIP_LEVELS[VIP_LEVELS.length - 1].tier;
 
 export enum UserRole {
   USER = 'USER',
@@ -29,13 +33,19 @@ export interface IUser extends Document {
   phone?: string;
   avatarUrl?: string;
   passwordHash: string;
+  /**
+   * Optional secondary "security password" (hashed by the pre('save') hook).
+   * Set or changed via POST /api/users/me/security-password with the login
+   * password as proof of ownership.
+   */
+  securityPasswordHash?: string;
   role: UserRole;
   status: AccountStatus;
   referralCode: string;
   referredBy?: Types.ObjectId;
   preferences: NotificationPreferences;
   lastLoginAt?: Date;
-  /** Active VIP tier index (0 = R0 Starter … 9 = R9 Crown). */
+  /** Active VIP tier index (0 = Intern … 10 = Master). */
   vipLevel: number;
   vipActivatedAt?: Date;
   createdAt: Date;
@@ -60,6 +70,7 @@ const UserSchema = new Schema<IUser>(
     phone: { type: String, trim: true, maxlength: 24 },
     avatarUrl: { type: String, trim: true, maxlength: 2048 },
     passwordHash: { type: String, required: true },
+    securityPasswordHash: { type: String },
     role: { type: String, enum: Object.values(UserRole), default: UserRole.USER, index: true },
     status: {
       type: String,
@@ -71,7 +82,7 @@ const UserSchema = new Schema<IUser>(
     referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
     preferences: { type: PreferencesSchema, default: () => ({}) },
     lastLoginAt: { type: Date },
-    vipLevel: { type: Number, default: 0, min: 0, max: 9 },
+    vipLevel: { type: Number, default: 0, min: 0, max: MAX_VIP_TIER },
     vipActivatedAt: { type: Date },
   },
   { timestamps: true }
@@ -94,6 +105,10 @@ UserSchema.pre<IUser>('save', async function (next) {
   // Hash password if it has been modified.
   if (this.isModified('passwordHash')) {
     this.passwordHash = await hashPassword(this.passwordHash);
+  }
+  // Hash the security password with the same scheme.
+  if (this.isModified('securityPasswordHash') && this.securityPasswordHash) {
+    this.securityPasswordHash = await hashPassword(this.securityPasswordHash);
   }
   // Ensure referral code exists.
   if (!this.referralCode) {

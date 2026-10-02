@@ -268,7 +268,15 @@ adminRouter.get('/vip/purchases', async (req: Request, res: Response, next: Next
       .populate('userId', 'fullName email')
       .sort({ createdAt: -1 })
       .limit(100);
-    res.json({ purchases });
+    // Admin actions use the stable DTO identifier. Raw Mongoose documents only
+    // expose `_id`, which made the client construct `/purchases/undefined/review`
+    // ("Invalid identifier.").
+    res.json({
+      purchases: purchases.map((purchase) => ({
+        ...purchase.toObject(),
+        id: purchase._id.toString(),
+      })),
+    });
   } catch (err) {
     next(err);
   }
@@ -301,6 +309,59 @@ adminRouter.post('/users/:id/password', async (req: Request, res: Response, next
     next(err);
   }
 });
+
+/**
+ * PATCH /api/admin/users/:id/profile
+ * Update a user's descriptive profile fields (name, email, phone, avatar).
+ * Wallet balances and ledger entries are never editable.
+ */
+adminRouter.patch('/users/:id/profile', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const patch: {
+      fullName?: string;
+      email?: string;
+      phone?: string;
+      avatarUrl?: string;
+    } = {};
+    if (req.body.fullName !== undefined) patch.fullName = String(req.body.fullName);
+    if (req.body.email !== undefined) patch.email = String(req.body.email);
+    if (req.body.phone !== undefined) patch.phone = String(req.body.phone);
+    if (req.body.avatarUrl !== undefined) patch.avatarUrl = String(req.body.avatarUrl);
+
+    const user = await adminService.updateUserProfile(req.params.id, patch);
+    await audit(req, 'user.profile.update', 'user', req.params.id, {
+      fields: Object.keys(patch),
+    });
+    res.json({ user });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/admin/users/:id/vip-level
+ * Set a user's membership tier directly (admin override). Audited and the user
+ * is notified in-app.
+ */
+adminRouter.post(
+  '/users/:id/vip-level',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const tier = Number(req.body.tier);
+      if (!Number.isFinite(tier)) {
+        return res.status(422).json({ message: 'Tier must be a number.' });
+      }
+      const user = await adminService.setUserVipLevel(req.params.id, tier);
+      await audit(req, 'user.vip_level.set', 'user', req.params.id, {
+        tier: user.vipLevel,
+        levelCode: user.vipLevelCode,
+      });
+      res.json({ user });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * POST /api/admin/users/:id/role

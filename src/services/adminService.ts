@@ -1,7 +1,7 @@
 // src/services/adminService.ts
 // Administrative operations: user management and platform statistics.
 
-import { User, AccountStatus, UserRole } from '../models/User';
+import { User, AccountStatus, UserRole, IUser } from '../models/User';
 import { Wallet } from '../models/Wallet';
 import { Transaction } from '../models/Transaction';
 import { Deposit, DepositStatus } from '../models/Deposit';
@@ -11,9 +11,13 @@ import { Task, ITask } from '../models/Task';
 import { TaskCompletion } from '../models/TaskCompletion';
 import { AuditLog } from '../models/AuditLog';
 import { Notification, NotificationType } from '../models/Notification';
+import { VIP_LEVELS, getLevelByTier } from '../config/vipLevels';
 import { sendEmail } from './email';
 import { env } from '../config/env';
 import { Types } from 'mongoose';
+
+/** Highest configured membership tier (tier 0 is Intern). */
+const MAX_VIP_TIER = VIP_LEVELS[VIP_LEVELS.length - 1].tier;
 
 function httpError(status: number, message: string): Error & { status: number } {
   const err = new Error(message) as Error & { status: number };
@@ -29,10 +33,36 @@ export interface AdminUserDTO {
   role: UserRole;
   status: AccountStatus;
   vipLevel: number;
+  /** Level code from the central catalogue, e.g. INTERN / R1 / MASTER. */
+  vipLevelCode: string;
+  vipLevelName: string;
   referralCode: string;
   createdAt: string;
   lastLoginAt?: string;
   availableBalance: number;
+}
+
+/**
+ * Shape the admin-facing user summary. The tier is always resolved through the
+ * central level catalogue so tier 0 renders as "INTERN" — never "R0".
+ */
+function toAdminUserDTO(user: IUser, availableBalance = 0): AdminUserDTO {
+  const level = getLevelByTier(user.vipLevel ?? 0) ?? VIP_LEVELS[0];
+  return {
+    id: user._id.toString(),
+    fullName: user.fullName,
+    email: user.email,
+    phone: user.phone,
+    role: user.role,
+    status: user.status,
+    vipLevel: level.tier,
+    vipLevelCode: level.code,
+    vipLevelName: level.name,
+    referralCode: user.referralCode,
+    createdAt: user.createdAt.toISOString(),
+    lastLoginAt: user.lastLoginAt?.toISOString(),
+    availableBalance,
+  };
 }
 
 export const adminService = {
@@ -65,19 +95,7 @@ export const adminService = {
 
     return {
       total,
-      users: users.map((u) => ({
-        id: u._id.toString(),
-        fullName: u.fullName,
-        email: u.email,
-        phone: u.phone,
-        role: u.role,
-        status: u.status,
-        vipLevel: u.vipLevel ?? 0,
-        referralCode: u.referralCode,
-        createdAt: u.createdAt.toISOString(),
-        lastLoginAt: u.lastLoginAt?.toISOString(),
-        availableBalance: balanceByUser.get(u._id.toString()) ?? 0,
-      })),
+      users: users.map((u) => toAdminUserDTO(u, balanceByUser.get(u._id.toString()) ?? 0)),
     };
   },
 
@@ -90,19 +108,7 @@ export const adminService = {
     await user.save();
 
     const wallet = await Wallet.findOne({ userId: user._id });
-    return {
-      id: user._id.toString(),
-      fullName: user.fullName,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-      status: user.status,
-      vipLevel: user.vipLevel ?? 0,
-      referralCode: user.referralCode,
-      createdAt: user.createdAt.toISOString(),
-      lastLoginAt: user.lastLoginAt?.toISOString(),
-      availableBalance: wallet?.availableBalance ?? 0,
-    };
+    return toAdminUserDTO(user, wallet?.availableBalance ?? 0);
   },
 
   /** Platform-wide counters for the admin dashboard. */
@@ -215,6 +221,9 @@ export const adminService = {
         User.countDocuments({ referredBy: user._id }),
       ]);
 
+    // Resolve the tier through the catalogue so tier 0 reads as INTERN.
+    const level = getLevelByTier(user.vipLevel ?? 0) ?? VIP_LEVELS[0];
+
     return {
       user: {
         id: user._id.toString(),
@@ -224,7 +233,9 @@ export const adminService = {
         avatarUrl: user.avatarUrl,
         role: user.role,
         status: user.status,
-        vipLevel: user.vipLevel ?? 0,
+        vipLevel: level.tier,
+        vipLevelCode: level.code,
+        vipLevelName: level.name,
         vipActivatedAt: user.vipActivatedAt?.toISOString(),
         referralCode: user.referralCode,
         referredBy: user.referredBy?.toString(),
@@ -326,19 +337,88 @@ export const adminService = {
     await user.save();
 
     const wallet = await Wallet.findOne({ userId: user._id });
-    return {
-      id: user._id.toString(),
-      fullName: user.fullName,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-      status: user.status,
-      vipLevel: user.vipLevel ?? 0,
-      referralCode: user.referralCode,
-      createdAt: user.createdAt.toISOString(),
-      lastLoginAt: user.lastLoginAt?.toISOString(),
-      availableBalance: wallet?.availableBalance ?? 0,
-    };
+    return toAdminUserDTO(user, wallet?.availableBalance ?? 0);
+  },
+
+  /**
+   * Update a user's profile fields (admin-initiated). Wallet balances and the
+   * ledger are never touched here — money only moves through Paystack
+   * deposits, approved withdrawals and engine-credited tasks.
+   */
+  async updateUserProfile(
+    userId: string | Types.ObjectId,
+    patch: { fullName?: string; email?: string; phone?: string; avatarUrl?: string }
+  ): Promise<AdminUserDTO> {
+    const user = await User.findById(userId);
+    if (!user) throw httpError(404, 'User not found.');
+
+    if (patch.fullName !== undefined) {
+      const fullName = String(patch.fullName).trim();
+      if (fullName.length < 2 || fullName.length > 80) {
+        throw httpError(422, 'Full name must be between 2 and 80 characters.');
+      }
+      user.fullName = fullName;
+    }
+
+    if (patch.email !== undefined) {
+      const email = String(patch.email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw httpError(422, 'Enter a valid email address.');
+      }
+      const clash = await User.findOne({ email, _id: { $ne: user._id } }).select('_id');
+      if (clash) throw httpError(409, 'Another account already uses that email address.');
+      user.email = email;
+    }
+
+    if (patch.phone !== undefined) {
+      const phone = String(patch.phone).trim();
+      if (phone.length > 24) throw httpError(422, 'Phone number must be at most 24 characters.');
+      user.phone = phone || undefined;
+    }
+
+    if (patch.avatarUrl !== undefined) {
+      const avatarUrl = String(patch.avatarUrl).trim();
+      if (avatarUrl.length > 2048) throw httpError(422, 'Avatar URL is too long.');
+      user.avatarUrl = avatarUrl || undefined;
+    }
+
+    await user.save();
+
+    const wallet = await Wallet.findOne({ userId: user._id });
+    return toAdminUserDTO(user, wallet?.availableBalance ?? 0);
+  },
+
+  /**
+   * Move a user to another membership tier (admin override). The tier is
+   * validated against the central catalogue (tier 0 is Intern) and the user is
+   * notified in-app.
+   */
+  async setUserVipLevel(userId: string | Types.ObjectId, tier: number): Promise<AdminUserDTO> {
+    const level = getLevelByTier(Math.round(Number(tier)));
+    if (!level) {
+      const top = VIP_LEVELS[VIP_LEVELS.length - 1];
+      throw httpError(
+        422,
+        `Tier must be between 0 (${VIP_LEVELS[0].code}) and ${top.tier} (${top.code}).`
+      );
+    }
+
+    const user = await User.findById(userId);
+    if (!user) throw httpError(404, 'User not found.');
+
+    user.vipLevel = level.tier;
+    user.vipActivatedAt = new Date();
+    await user.save();
+
+    await Notification.create({
+      userId: user._id,
+      type: NotificationType.VIP,
+      title: 'Membership level updated',
+      message: `An administrator set your membership level to ${level.code} (${level.name}).`,
+    });
+
+    const wallet = await Wallet.findOne({ userId: user._id });
+    return toAdminUserDTO(user, wallet?.availableBalance ?? 0);
   },
 
   // --- Task administration --------------------------------------------------
@@ -379,7 +459,7 @@ export const adminService = {
       title: input.title,
       description: input.description,
       reward,
-      minVipTier: Math.min(Math.max(Math.round(Number(input.minVipTier ?? 0)), 0), 9),
+      minVipTier: Math.min(Math.max(Math.round(Number(input.minVipTier ?? 0)), 0), MAX_VIP_TIER),
       dailyLimit: Math.min(Math.max(Math.round(Number(input.dailyLimit ?? 1)), 1), 50),
       active: input.active ?? true,
       sortOrder: Math.round(Number(input.sortOrder ?? 0)),
@@ -412,7 +492,7 @@ export const adminService = {
       task.reward = reward;
     }
     if (patch.minVipTier !== undefined) {
-      task.minVipTier = Math.min(Math.max(Math.round(Number(patch.minVipTier)), 0), 9);
+      task.minVipTier = Math.min(Math.max(Math.round(Number(patch.minVipTier)), 0), MAX_VIP_TIER);
     }
     if (patch.dailyLimit !== undefined) {
       task.dailyLimit = Math.min(Math.max(Math.round(Number(patch.dailyLimit)), 1), 50);

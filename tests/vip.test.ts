@@ -6,6 +6,7 @@ import type { Express } from 'express';
 import { freshApp, authenticatedAgent } from './helpers';
 import { User, UserRole, AccountStatus } from '../src/models/User';
 import { VipPurchase, VipPurchaseStatus } from '../src/models/VipPurchase';
+import { bootstrapService } from '../src/services/bootstrapService';
 
 const ADMIN_USER = {
   fullName: 'Admin User',
@@ -147,5 +148,40 @@ describe('VIP endpoints', () => {
     await agent.post('/api/vip/purchase').send({ levelCode: 'R1' }).expect(201);
     const count = await VipPurchase.countDocuments({ userId: user.id, status: VipPurchaseStatus.PENDING });
     expect(count).toBe(1);
+  });
+
+  it('enforces the launch access control: Intern–R3 open, R4+ locked until an admin opens them', async () => {
+    const app = freshApp();
+    const { agent } = await authenticatedAgent(app);
+    const admin = await adminAgent(app);
+    await bootstrapService.bootstrapLevels(); // seeds Intern–R3 OPEN, R4+ LOCKED
+
+    // The public catalogue reports the live status managed from the dashboard.
+    const levels = await request(app).get('/api/vip/levels').expect(200);
+    const byCode = (code: string) =>
+      levels.body.levels.find((level: { code: string }) => level.code === code);
+    expect(byCode('INTERN').status).toBe('active');
+    expect(byCode('R1').status).toBe('active');
+    expect(byCode('R3').status).toBe('active');
+    expect(byCode('R4').status).toBe('locked');
+    expect(byCode('MASTER').status).toBe('locked');
+
+    // Intern users may upgrade directly to VIP 3.
+    await agent.post('/api/vip/purchase').send({ levelCode: 'R3' }).expect(201);
+    await agent.delete('/api/vip/purchase').expect(200);
+
+    // Locked levels reject upgrade requests.
+    await agent.post('/api/vip/purchase').send({ levelCode: 'R4' }).expect(403);
+    await agent.post('/api/vip/purchase').send({ levelCode: 'R5' }).expect(403);
+
+    // Opening R4 from the admin console immediately allows the upgrade…
+    await admin.patch('/api/admin/levels/R4').send({ status: 'OPEN' }).expect(200);
+    await agent.post('/api/vip/purchase').send({ levelCode: 'R4' }).expect(201);
+    await agent.delete('/api/vip/purchase').expect(200);
+
+    // …and closing it again blocks new requests while R5+ stay locked.
+    await admin.patch('/api/admin/levels/R4').send({ status: 'LOCKED' }).expect(200);
+    await agent.post('/api/vip/purchase').send({ levelCode: 'R4' }).expect(403);
+    await agent.post('/api/vip/purchase').send({ levelCode: 'R5' }).expect(403);
   });
 });

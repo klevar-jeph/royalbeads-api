@@ -9,8 +9,16 @@
 import { User } from '../models/User';
 import { VipPurchase, VipPurchaseStatus, IVipPurchase } from '../models/VipPurchase';
 import { Notification, NotificationType } from '../models/Notification';
-import { VIP_LEVELS, getLevelByCode, getLevelByTier, levelsAbove, VipLevelConfig } from '../config/vipLevels';
+import {
+  VIP_LEVELS,
+  getLevelByCode,
+  getLevelByTier,
+  LOCKED_BY_DEFAULT_FROM_TIER,
+  VipLevelConfig,
+} from '../config/vipLevels';
 import { VipLevelDTO, VipStatusDTO, VipPurchaseDTO } from '../types/dto';
+import { LevelConfig } from '../models/LevelConfig';
+import { levelService } from './levelService';
 import { Types } from 'mongoose';
 import { TransactionType } from '../models/Transaction';
 import { walletService } from './walletService';
@@ -52,10 +60,34 @@ function httpError(status: number, message: string): Error & { status: number } 
   return err;
 }
 
+/**
+ * Catalogue with the admin-controlled open/locked status merged in.
+ * The database status (managed per level from the admin dashboard) wins over
+ * the static catalogue, so R4+ read as closed until an admin opens them.
+ */
+async function loadCatalogue(): Promise<VipLevelDTO[]> {
+  const configs = await LevelConfig.find({}).select(
+    'code status temporaryOpen temporaryOpenStart temporaryOpenEnd'
+  );
+  const byCode = new Map(configs.map((config) => [config.code, config]));
+
+  return VIP_LEVELS.map((level) => {
+    const dto = toLevelDTO(level);
+    const config = byCode.get(level.code);
+    if (config) {
+      if (!levelService.isLevelAccessible(config)) dto.status = 'locked';
+    } else if (level.tier >= LOCKED_BY_DEFAULT_FROM_TIER) {
+      // Launch default when the level is not configured in the database yet.
+      dto.status = 'locked';
+    }
+    return dto;
+  });
+}
+
 export const vipService = {
-  /** All configured levels, ascending. */
-  listLevels(): VipLevelDTO[] {
-    return VIP_LEVELS.map(toLevelDTO);
+  /** All configured levels, ascending, with live open/locked status. */
+  async listLevels(): Promise<VipLevelDTO[]> {
+    return loadCatalogue();
   },
 
   /** The current user's VIP status: level, next level, pending purchase. */
@@ -64,7 +96,11 @@ export const vipService = {
     if (!user) return null;
 
     const currentLevel = getLevelByTier(user.vipLevel ?? 0) ?? VIP_LEVELS[0];
-    const nextLevel = levelsAbove(currentLevel.tier)[0];
+    // "Next" points at the first level the user can actually enter — locked
+    // tiers above it stay visible in the catalogue but are not offered as next.
+    const nextLevel = (await loadCatalogue()).find(
+      (candidate) => candidate.tier > currentLevel.tier && candidate.status !== 'locked'
+    );
 
     const pending = await VipPurchase
       .findOne({ userId: user._id, status: VipPurchaseStatus.PENDING })
@@ -72,7 +108,7 @@ export const vipService = {
 
     return {
       current: toLevelDTO(currentLevel),
-      next: nextLevel ? toLevelDTO(nextLevel) : undefined,
+      next: nextLevel,
       activatedAt: user.vipActivatedAt?.toISOString(),
       pendingPurchase: pending ? toPurchaseDTO(pending) : undefined,
     };
@@ -104,7 +140,19 @@ export const vipService = {
 
     const currentTier = user.vipLevel ?? 0;
     if (level.tier <= currentTier) {
-      throw httpError(400, `You are already on ${getLevelByTier(currentTier)?.code ?? 'R0'} or higher.`);
+      throw httpError(400, `You are already on ${getLevelByTier(currentTier)?.code ?? VIP_LEVELS[0].code} or higher.`);
+    }
+
+    // Launch access control: upgrades may only target a level the admin has
+    // opened. R4 and above ship locked and are opened from the admin console.
+    const levelConfig = await LevelConfig.findOne({ code: level.code }).select(
+      'status temporaryOpen temporaryOpenStart temporaryOpenEnd'
+    );
+    const open = levelConfig
+      ? levelService.isLevelAccessible(levelConfig)
+      : level.tier < LOCKED_BY_DEFAULT_FROM_TIER;
+    if (!open) {
+      throw httpError(403, `${level.code} is locked and not open for upgrades right now.`);
     }
 
     const existing = await VipPurchase.findOne({

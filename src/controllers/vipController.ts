@@ -14,7 +14,7 @@ function httpError(status: number, message: string): Error & { status: number } 
 export const vipController = {
   async listLevels(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      res.json({ levels: vipService.listLevels() });
+      res.json({ levels: await vipService.listLevels() });
     } catch (err) {
       next(err);
     }

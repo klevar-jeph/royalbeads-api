@@ -54,3 +54,19 @@ export const changePasswordSchemaUser = z.object({
       .refine((v) => /\d/.test(v), 'Password must contain a number.'),
   }),
 });
+
+// Mine → Security → Change Security Password.
+// The login password always proves ownership, whether the security password is
+// being set for the first time or changed.
+export const changeSecurityPasswordSchema = z.object({
+  body: z.object({
+    currentPassword: z.string().min(1, 'Current password is required.'),
+    securityPassword: z
+      .string()
+      .min(8, 'Security password must be at least 8 characters.')
+      .max(128, 'Security password must be 128 characters or fewer.')
+      .refine((v) => /[A-Z]/.test(v), 'Security password must contain an uppercase letter.')
+      .refine((v) => /[a-z]/.test(v), 'Security password must contain a lowercase letter.')
+      .refine((v) => /\d/.test(v), 'Security password must contain a number.'),
+  }),
+});

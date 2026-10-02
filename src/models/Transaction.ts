@@ -16,6 +16,7 @@ export enum TransactionType {
   RED_ENVELOPE_REWARD = 'RED_ENVELOPE_REWARD',
   WEEKLY_EVENT_REWARD = 'WEEKLY_EVENT_REWARD',
   VIP_PURCHASE = 'VIP_PURCHASE',
+  FUND_INVESTMENT = 'FUND_INVESTMENT',
   DEPOSIT = 'DEPOSIT',
   WITHDRAWAL = 'WITHDRAWAL',
   ADJUSTMENT = 'ADJUSTMENT',
@@ -56,4 +57,20 @@ const TransactionSchema = new Schema<ITransaction>(
 TransactionSchema.index({ userId: 1, createdAt: -1 });
 
 export const Transaction = model<ITransaction>('Transaction', TransactionSchema);
+
+/**
+ * Ledger types that count towards the user's "Total Earning Balance":
+ * personal task earnings, team/referral commissions, salary claims and
+ * platform rewards. Deposits, withdrawals, purchases and investments are
+ * explicitly NOT earnings.
+ */
+export const EARNING_TRANSACTION_TYPES: TransactionType[] = [
+  TransactionType.TASK_REWARD,
+  TransactionType.REFERRAL_COMMISSION,
+  TransactionType.TEAM_COMMISSION,
+  TransactionType.SALARY_CLAIM,
+  TransactionType.LUCKY_DRAW_REWARD,
+  TransactionType.RED_ENVELOPE_REWARD,
+  TransactionType.WEEKLY_EVENT_REWARD,
+];
 

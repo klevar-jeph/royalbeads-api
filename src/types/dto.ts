@@ -38,11 +38,16 @@ export interface DashboardSummaryDTO {
   // They are explicitly zero/empty – not fabricated values.
   availableBalance: number;
   totalEarnings: number;
+  /**
+   * Total Earning Balance (Mine): lifetime sum of earning-type credits only
+   * (tasks, team/referral commissions, salary, rewards) — excludes deposits.
+   */
+  totalEarningBalance: number;
   totalDeposits: number;
   totalWithdrawals: number;
   referralEarnings: number;
   vip: {
-    level: string; // e.g. "R0"
+    level: string; // e.g. "INTERN" (tier 0), "R1" … "MASTER"
     levelName: string;
     tier: number;
   };

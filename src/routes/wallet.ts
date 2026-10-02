@@ -26,6 +26,13 @@ walletRouter.get('/', walletController.getOverview);
 walletRouter.get('/transactions', walletController.getTransactions);
 
 /**
+ * GET /api/wallet/earnings
+ * Earnings by source (tasks, team, referrals, salary, rewards) — the total is
+ * the Total Earning Balance shown at the top of Mine.
+ */
+walletRouter.get('/earnings', walletController.getEarnings);
+
+/**
  * GET /api/wallet/instructions
  * Payment instructions for the active provider (bank details when manual).
  */

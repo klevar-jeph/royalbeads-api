@@ -17,7 +17,13 @@ import { teamCommissionService } from './teamCommissionService';
 import { levelService } from './levelService';
 
 import { TASK_SEEDS } from '../config/tasks';
+import { getLevelByTier } from '../config/vipLevels';
 import { Types } from 'mongoose';
+
+/** Human label for a VIP tier gate, driven by the central level config. */
+function tierLabel(tier: number): string {
+  return getLevelByTier(tier)?.code ?? `tier ${tier}`;
+}
 
 function httpError(status: number, message: string): Error & { status: number } {
   const err = new Error(message) as Error & { status: number };
@@ -94,7 +100,7 @@ export const taskService = {
         completedToday: entry.count,
         remainingToday: locked ? 0 : Math.max(task.dailyLimit - entry.count, 0),
         locked,
-        lockReason: !matchesLevel ? `Requires level ${task.minVipTier}` : schedule.reason,
+        lockReason: !matchesLevel ? `Requires level ${tierLabel(task.minVipTier)}` : schedule.reason,
       };
     });
 
@@ -148,7 +154,7 @@ export const taskService = {
     if (!matchesLevel) {
       // Preserve the historical message contract for tier-gated tasks.
       if (!task.assignedLevels || task.assignedLevels.length === 0) {
-        throw httpError(403, `This task requires VIP level R${task.minVipTier}.`);
+        throw httpError(403, `This task requires VIP level ${tierLabel(task.minVipTier)}.`);
       }
       throw httpError(403, `This task is not available for level ${levelCode}.`);
     }

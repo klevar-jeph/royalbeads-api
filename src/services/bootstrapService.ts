@@ -51,9 +51,24 @@ export const bootstrapService = {
 
   async bootstrapLevels(): Promise<void> {
     for (const lvl of INITIAL_LEVELS) {
-      const exists = await LevelConfig.findOne({ code: lvl.code });
-      if (!exists) {
+      const existing = await LevelConfig.findOne({ code: lvl.code });
+      if (!existing) {
         await LevelConfig.create(lvl);
+        continue;
+      }
+
+      // Launch defaults (Intern–R3 OPEN, R4..Master LOCKED) apply only until an
+      // admin touches a level: never overwrite a manual open/close decision
+      // made from the dashboard. A document whose timestamps are identical has
+      // never been edited, so it still carries whatever it was first seeded
+      // with — normalise it once so databases seeded by older builds also
+      // start with the launch state.
+      const neverEdited = existing.createdAt.getTime() === existing.updatedAt.getTime();
+      if (neverEdited && existing.status !== lvl.status) {
+        await LevelConfig.updateOne(
+          { _id: existing._id },
+          { $set: { status: lvl.status } }
+        ).exec();
       }
     }
   },

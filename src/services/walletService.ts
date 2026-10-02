@@ -10,7 +10,7 @@
 // cannot double-pay.
 
 import { Wallet, IWallet } from '../models/Wallet';
-import { Transaction, TransactionType, ITransaction } from '../models/Transaction';
+import { Transaction, TransactionType, ITransaction, EARNING_TRANSACTION_TYPES } from '../models/Transaction';
 import { Types } from 'mongoose';
 
 function httpError(status: number, message: string): Error & { status: number } {
@@ -144,5 +144,39 @@ export const walletService = {
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
     return result[0]?.total ?? 0;
+  },
+
+  /** Sum of ledger amounts across several types in a single aggregation. */
+  async sumByTypes(
+    userId: string | Types.ObjectId,
+    types: TransactionType[]
+  ): Promise<number> {
+    const result = await Transaction.aggregate<{ total: number | undefined }>([
+      { $match: { userId: new Types.ObjectId(userId.toString()), type: { $in: types } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    return result[0]?.total ?? 0;
+  },
+
+  /**
+   * Earnings by source — powers Mine → Earnings.
+   * `total` is the Total Earning Balance (earning types only; deposits and
+   * other non-earning credits are excluded by definition).
+   */
+  async earningsBreakdown(userId: string | Types.ObjectId) {
+    const [total, taskRewards, teamCommissions, referralCommissions, salaryClaims, rewards] =
+      await Promise.all([
+        walletService.sumByTypes(userId, EARNING_TRANSACTION_TYPES),
+        walletService.sumByTypes(userId, [TransactionType.TASK_REWARD]),
+        walletService.sumByTypes(userId, [TransactionType.TEAM_COMMISSION]),
+        walletService.sumByTypes(userId, [TransactionType.REFERRAL_COMMISSION]),
+        walletService.sumByTypes(userId, [TransactionType.SALARY_CLAIM]),
+        walletService.sumByTypes(userId, [
+          TransactionType.LUCKY_DRAW_REWARD,
+          TransactionType.RED_ENVELOPE_REWARD,
+          TransactionType.WEEKLY_EVENT_REWARD,
+        ]),
+      ]);
+    return { total, taskRewards, teamCommissions, referralCommissions, salaryClaims, rewards };
   },
 };

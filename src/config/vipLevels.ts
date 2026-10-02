@@ -29,8 +29,17 @@ export const VIP_LEVELS: VipLevelConfig[] = [
   { id: 10, code: 'MASTER', name: 'Master', investment: 19_000_000, dailyReturn: 760_000, taskCount: 300, taskReward: 1_900, tier: 10, description: 'The highest available membership tier.', status: 'active' },
 ];
 
-export const VIP_DISCLAIMER =
-  'Membership investment and return figures are configurable business data and do not constitute a guarantee of returns. All participation involves risk. Figures are subject to validation and change by the platform operator.';
+/**
+ * Launch access control.
+ *
+ * Tiers from this constant upwards ship CLOSED: users can see them in the
+ * catalogue but cannot request an upgrade until an administrator opens the
+ * level from the admin dashboard (Levels → status = OPEN). Intern (0) through
+ * R3 (3) are open at launch.
+ */
+export const LOCKED_BY_DEFAULT_FROM_TIER = 4;
+
+export const VIP_DISCLAIMER =  'Membership investment and return figures are configurable business data and do not constitute a guarantee of returns. All participation involves risk. Figures are subject to validation and change by the platform operator.';
 
 export function getLevelByCode(code: string): VipLevelConfig | undefined {
   return VIP_LEVELS.find((level) => level.code === code.toUpperCase());

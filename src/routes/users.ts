@@ -8,7 +8,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { apiLimiter, sensitiveLimiter } from '../middleware/rateLimiter';
 import { validate } from '../validation/auth';
-import { updateProfileSchema, updatePreferencesSchema } from '../validation/user';
+import { updateProfileSchema, updatePreferencesSchema, changeSecurityPasswordSchema } from '../validation/user';
 import { userController } from '../controllers/userController';
 import { changePasswordSchema } from '../validation/auth';
 
@@ -51,6 +51,17 @@ userRouter.post(
   sensitiveLimiter,
   validate(changePasswordSchema),
   userController.changePassword
+);
+
+/**
+ * POST /api/users/me/security-password
+ * Set or change the secondary security password (login password required).
+ */
+userRouter.post(
+  '/me/security-password',
+  sensitiveLimiter,
+  validate(changeSecurityPasswordSchema),
+  userController.setSecurityPassword
 );
 
 export default userRouter;
